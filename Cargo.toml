@@ -11,15 +11,20 @@ test = false
 bench = false
 
 [dependencies]
-panic-halt = "0.2.0"
+panic-halt = "1.0.0"
 ufmt = "0.2.0"
 nb = "1.1.0"
 embedded-hal = "1.0"
+heapless = "0.8.0"
 
 [dependencies.arduino-hal]
 git = "https://github.com/rahix/avr-hal"
 rev = "3e362624547462928a219c40f9ea8e3a64f21e5f"
-features = ["arduino-mega2560"]
+features = ["arduino-mega2560", "rt"]
+
+[dependencies.avr-device]
+version = "0.5.4"
+features = ["atmega2560"]
 
 # The latest releases of `proc-macro2` do not support the rust toolchain that
 # we use.  Thus, we must fix this dependency to an older version where our
