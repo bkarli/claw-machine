@@ -13,33 +13,32 @@
 //! Create A Timer instance and add to its respective queue
 
 use core::cell::{RefCell, Cell, RefMut};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use avr_device::atmega2560::{TC0, TC1};
+use avr_device::interrupt;
 use heapless::binary_heap::{BinaryHeap, Min};
+
 use crate::CONSOLE;
+use crate::executor::ExtWaker;
 
 // Type alias for avr_device::interrupt::Mutex to Mutex
-type Mutex<T> = avr_device::interrupt::Mutex<T>;
+type Mutex<T> = interrupt::Mutex<T>;
 
 
-
-/// declare static precision ticker
-static P_TICKER: PrecisionTicker = PrecisionTicker{ tc0: Mutex::new(RefCell::new(None)), max: 250 };
 
 /// declare static generic Ticker
 static G_TICKER: GenericTicker = GenericTicker {tc1: Mutex::new(RefCell::new(None)), max: 62500 };
 
-/// binary heap that acts as the priority queue for our Precision timers
-static P_QUEUE: Mutex<RefCell<BinaryHeap<(u16, usize), Min, 8>>> = Mutex::new(RefCell::new(BinaryHeap::new()));
-
 /// binary heap that acts as the priority queue for our Generic timers
-static G_QUEUE: Mutex<RefCell<BinaryHeap<(u32, usize), Min, 4>>> = Mutex::new(RefCell::new(BinaryHeap::new()));
-
-
-/// Keep track of current precision tick count
-static P_TICK_COUNTER: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
+static G_QUEUE: Mutex<RefCell<BinaryHeap<(u64, usize), Min, 4>>> = Mutex::new(RefCell::new(BinaryHeap::new()));
 
 /// Keep track of current generic tick count
-static G_TICK_COUNTER: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
+static G_TICK_COUNTER: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
+
+/// A variable tick incrementer
+static G_TICK_INCREMENT: Mutex<Cell<u64>> = Mutex::new(Cell::new(65535));
 
 
 
@@ -60,9 +59,16 @@ const fn us_to_p_ticks(us: u16) -> u16 {
     Our max 62'500
     When our max match occurs every four seconds
 */
-const fn s_to_generic_ticks(s: u8) -> u32 {
-    62500 * s as u32
+const fn s_to_generic_ticks(s: u8) -> u64 {
+    62500 * s as u64
 }
+
+
+pub enum TimerState {
+    Init,
+    Waiting
+}
+
 
 
 /**
@@ -86,11 +92,120 @@ impl GenericTicker {
         tc1.timsk1.write(|w| w.ocie1a().set_bit());
 
         // replace the tc1
-        avr_device::interrupt::free(|cs| {
+        interrupt::free(|cs| {
             G_TICKER.tc1.borrow(cs).replace(Some(tc1));
+            G_TICK_COUNTER.borrow(cs).set(0);
+        })
+    }
+
+    /**
+    Gets the current generic tick count
+    */
+    pub fn now() -> u64 {
+        interrupt::free(|cs| {
+            G_TICK_COUNTER.borrow(cs).get()
         })
     }
 }
+
+pub(crate) struct GenericTimer {
+    end_ticks: u64,
+    state: TimerState
+}
+
+impl GenericTimer {
+    pub fn new(seconds: u8) -> Self {
+        Self {
+            end_ticks: s_to_generic_ticks(seconds),
+            state: TimerState::Init
+        }
+    }
+    pub(crate) fn register(&self, task: usize) {
+        // create critical section as no interrupts should happen during registering of a timer
+        // also we need some shared variables
+        interrupt::free(|cs| {
+            let mut queue = G_QUEUE.borrow(cs).borrow_mut();
+            let is_first = if let Some((next_timer, _) ) = queue.peek() {
+                self.end_ticks < *next_timer
+            } else {
+                true
+            };
+            if queue.push((self.end_ticks, task)).is_err() {
+                panic!("Queue full")
+            }
+            // if it is the first element queue for wakeup
+            if is_first {
+                let ticks = G_TICK_COUNTER.borrow(cs).get();
+                schedule_generic_wakeup(queue, G_TICKER.tc1.borrow(cs).borrow_mut(), ticks)
+            }
+        })
+    }
+}
+
+impl Future for GenericTimer {
+    type Output = ();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.state {
+            TimerState::Init => {
+                self.register(cx.waker().task());
+                self.state = TimerState::Waiting;
+                Poll::Pending
+            }
+            TimerState::Waiting => {
+                if GenericTicker::now() >= self.end_ticks {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+    }
+}
+
+/**
+public function that creates a GenericTimer that delays something for n seconds
+*/
+pub async fn delay_s(seconds: u8) {
+    GenericTimer::new(seconds).await
+}
+
+/**
+Add a new timer to the generic queue
+*/
+fn schedule_generic_wakeup(
+    mut queue: RefMut<BinaryHeap<(u64, usize), Min, 4>>,
+    mut tc1: RefMut<Option<TC1>>,
+    counter: u64
+) {
+    // take first of queue
+    // if first end tick - current tick <= 65535 add set ticker delta and modify increment
+    while let Some((end_ticks, task)) = queue.peek() {
+
+    }
+}
+
+/**
+Interrupt triggered at least every seconds
+*/
+#[avr_device::interrupt(atmega2560)]
+#[allow(non_snake_case)]
+fn TIMER1_COMPA() {
+    interrupt::free(|cs| {
+        let counter_c = G_TICK_COUNTER.borrow(cs);
+        let counter = counter_c.get() + G_TICK_INCREMENT.borrow(cs).get();
+        counter_c.set(counter);
+    })
+}
+
+/// declare static precision ticker
+static P_TICKER: PrecisionTicker = PrecisionTicker{ tc0: Mutex::new(RefCell::new(None)), max: 250 };
+
+/// binary heap that acts as the priority queue for our Precision timers
+static P_QUEUE: Mutex<RefCell<BinaryHeap<(u16, usize), Min, 8>>> = Mutex::new(RefCell::new(BinaryHeap::new()));
+
+/// Keep track of current precision tick count
+static P_TICK_COUNTER: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
+
 
 /**
 Ticker to generate Ticker with microsecond precision used internally to generate Timer Events with
@@ -116,7 +231,7 @@ impl PrecisionTicker {
         tc0.tccr0b.write(|w| w.cs0().prescale_64());
 
         // replace tc0
-        avr_device::interrupt::free(|cs| {
+        interrupt::free(|cs| {
             P_TICKER.tc0.borrow(cs).replace(Some(tc0));
         })
     }
@@ -134,67 +249,16 @@ impl PrecisionTimer {
     }
 
     fn register(&self, task: usize) {
-        avr_device::interrupt::free(|cs| {})
-    }
-}
-
-pub(crate) struct GenericTimer {
-    end_ticks: u32
-}
-
-impl GenericTimer {
-    pub fn new(seconds: u8) -> Self {
-        Self {
-            end_ticks: s_to_generic_ticks(seconds)
-        }
-    }
-    pub(crate) fn register(&self, task: usize) {
-
+        interrupt::free(|cs| {})
     }
 }
 
 /**
-Add a new timer to the precision queue
-*/
-fn schedule_precision_wakeup(
-
-) {
-
-}
-
-/**
-Add a new timer to the generic queue
-*/
-fn schedule_generic_wakeup(
-    mut queue: RefMut<BinaryHeap<(u32, usize), Min, 4>>,
-    mut tc1: RefMut<Option<TC1>>,
-    current_ticks: u32
-) {
-
-}
-
-
-
-/**
-Interrupt triggered at least every millisecond
+    Interrupt triggered at least every millisecond
 */
 #[avr_device::interrupt(atmega2560)]
 #[allow(non_snake_case)]
 fn TIMER0_COMPA() {
-    avr_device::interrupt::free(|cs| {
-    })
-}
-
-
-/**
-    Interrupt triggered at least every seconds
-*/
-#[avr_device::interrupt(atmega2560)]
-#[allow(non_snake_case)]
-fn TIMER1_COMPA() {
-    avr_device::interrupt::free(|cs| {
-        if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
-            let _ = ufmt::uwriteln!(console,"Generic interrupt triggered!");
-        }
+    interrupt::free(|cs| {
     })
 }
