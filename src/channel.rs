@@ -1,19 +1,17 @@
-use core::cell::{
-    {Cell, RefCell}
-};
+use core::cell::{Cell, RefCell};
 use core::future::poll_fn;
 use core::task::{Poll, Waker};
 
 pub struct Channel<T> {
     item: Cell<Option<T>>,
-    waker: RefCell<Option<Waker>>
+    waker: RefCell<Option<Waker>>,
 }
 
-impl <T> Channel<T> {
+impl<T> Channel<T> {
     pub fn new() -> Self {
         Self {
             item: Cell::new(None),
-            waker: RefCell::new(None)
+            waker: RefCell::new(None),
         }
     }
 
@@ -46,9 +44,8 @@ impl <T> Channel<T> {
 }
 
 pub struct Sender<'a, T> {
-    channel: &'a Channel<T>
+    channel: &'a Channel<T>,
 }
-
 
 impl<T> Sender<'_, T> {
     pub fn send(&self, item: T) {
@@ -58,12 +55,12 @@ impl<T> Sender<'_, T> {
 
 enum ReceiverState {
     Init,
-    Wait
+    Wait,
 }
 
 pub struct Receiver<'a, T> {
     channel: &'a Channel<T>,
-    state: ReceiverState
+    state: ReceiverState,
 }
 
 impl<T> Receiver<'_, T> {
@@ -77,7 +74,8 @@ impl<T> Receiver<'_, T> {
             ReceiverState::Wait => match self.channel.receive() {
                 Some(item) => Poll::Ready(item),
                 None => Poll::Pending,
-            }
-        }).await
+            },
+        })
+        .await
     }
 }

@@ -1,31 +1,25 @@
-use core::cell::{Cell, RefCell};
-use core::future::{poll_fn, Future};
-use core::task::{Context, Poll};
-use arduino_hal::hal::port::Dynamic;
-use arduino_hal::port::mode::{Input, PullUp};
-use arduino_hal::port::Pin;
 use avr_device::interrupt;
+use core::cell::RefCell;
+use core::future::poll_fn;
+use core::task::Poll;
 
-use crate::{Mutex, J_BACKWARD, J_FORWARD, J_LEFT, J_RIGHT};
 use crate::channel::Sender;
 use crate::executor::{wake_task, ExtWaker};
 use crate::stepper::StepperDirection;
 use crate::stepper::StepperDirection::{ClockWise, CounterClockWise, Idle};
+use crate::{Mutex, J_BACKWARD, J_FORWARD, J_LEFT, J_RIGHT};
 
-static JOYSTICK_SWITCH_TASKS: [Mutex<RefCell<usize>>;4] = [
+static JOYSTICK_SWITCH_TASKS: [Mutex<RefCell<usize>>; 4] = [
     Mutex::new(RefCell::new(0xFFFF)),
     Mutex::new(RefCell::new(0xFFFF)),
     Mutex::new(RefCell::new(0xFFFF)),
     Mutex::new(RefCell::new(0xFFFF)),
 ];
 
-static JOYSTICK_SWITCH_STATES: Mutex<RefCell<[bool; 4]>> = Mutex::new(
-    RefCell::new(
-        [false, false, false, false]
-    )
-);
+static JOYSTICK_SWITCH_STATES: Mutex<RefCell<[bool; 4]>> =
+    Mutex::new(RefCell::new([false, false, false, false]));
 pub struct JoystickSwitch {
-    joystick_direction:  JoystickDirection,
+    joystick_direction: JoystickDirection,
     switch_index: usize,
 }
 
@@ -34,14 +28,11 @@ pub enum JoystickDirection {
     RIGHT,
     LEFT,
     FORWARD,
-    BACKWARD
+    BACKWARD,
 }
 
 impl JoystickSwitch {
-    pub fn new(
-        joystick_direction: JoystickDirection,
-        switch_index: usize,
-    ) -> Self {
+    pub fn new(joystick_direction: JoystickDirection, switch_index: usize) -> Self {
         Self {
             joystick_direction,
             switch_index,
@@ -52,24 +43,35 @@ impl JoystickSwitch {
         poll_fn(|cx| {
             if interrupt::free(|cs| {
                 return match self.joystick_direction {
-                    JoystickDirection::RIGHT => {desired_state == J_RIGHT.borrow(cs).take().unwrap().is_high() }
-                    JoystickDirection::LEFT => {desired_state == J_LEFT.borrow(cs).take().unwrap().is_high() }
-                    JoystickDirection::FORWARD => {desired_state == J_FORWARD.borrow(cs).take().unwrap().is_high() }
-                    JoystickDirection::BACKWARD => {desired_state == J_BACKWARD.borrow(cs).take().unwrap().is_high() }
-                }
-
+                    JoystickDirection::RIGHT => {
+                        desired_state == J_RIGHT.borrow(cs).take().unwrap().is_high()
+                    }
+                    JoystickDirection::LEFT => {
+                        desired_state == J_LEFT.borrow(cs).take().unwrap().is_high()
+                    }
+                    JoystickDirection::FORWARD => {
+                        desired_state == J_FORWARD.borrow(cs).take().unwrap().is_high()
+                    }
+                    JoystickDirection::BACKWARD => {
+                        desired_state == J_BACKWARD.borrow(cs).take().unwrap().is_high()
+                    }
+                };
             }) {
                 Poll::Ready(())
             } else {
                 interrupt::free(|cs| {
-                    let _ = JOYSTICK_SWITCH_TASKS.get(self.switch_index).unwrap().borrow(cs).replace(cx.waker().task());
+                    let _ = JOYSTICK_SWITCH_TASKS
+                        .get(self.switch_index)
+                        .unwrap()
+                        .borrow(cs)
+                        .replace(cx.waker().task());
                 });
                 Poll::Pending
             }
-        }).await
+        })
+        .await
     }
 }
-
 
 /**
 Pin Change interrupt triggered if a Joy Stick switch has been triggered
@@ -77,7 +79,6 @@ Pin Change interrupt triggered if a Joy Stick switch has been triggered
 #[avr_device::interrupt(atmega2560)]
 #[allow(non_snake_case)]
 fn PCINT0() {
-
     // We don't actually need to create a critical section as AVR suppresses other interrupts during
     // an interrupt
     interrupt::free(|cs| {
@@ -88,29 +89,31 @@ fn PCINT0() {
         let joystick_states = JOYSTICK_SWITCH_STATES.borrow(cs).borrow_mut();
         let pins = [right_pin, left_pin, forward_pin, backward_pin];
 
-        for (index ,switch_state ) in joystick_states.iter().enumerate() {
+        for (index, switch_state) in joystick_states.iter().enumerate() {
             if pins.get(index).unwrap().is_high() != *switch_state {
-                let joystick_task = JOYSTICK_SWITCH_TASKS.get(index).unwrap().borrow(cs).replace(0xFFFF);
+                let joystick_task = JOYSTICK_SWITCH_TASKS
+                    .get(index)
+                    .unwrap()
+                    .borrow(cs)
+                    .replace(0xFFFF);
                 if joystick_task != 0xFFFF {
                     wake_task(joystick_task)
                 }
             }
         }
-    }
-    );
+    });
 }
 
 pub async fn joystick_switch_task(
     direction: JoystickDirection,
-    motor_sender: Sender<'_, StepperDirection>
+    motor_sender: Sender<'_, StepperDirection>,
 ) {
     let (index, stepper_direction): (usize, StepperDirection) = match direction {
-        JoystickDirection::RIGHT => (0usize,CounterClockWise),
-        JoystickDirection::LEFT => (1usize,ClockWise),
+        JoystickDirection::RIGHT => (0usize, CounterClockWise),
+        JoystickDirection::LEFT => (1usize, ClockWise),
         JoystickDirection::FORWARD => (2usize, CounterClockWise),
-        JoystickDirection::BACKWARD => (3usize, ClockWise)
+        JoystickDirection::BACKWARD => (3usize, ClockWise),
     };
-
 
     let mut joystick_switch = JoystickSwitch::new(direction, index);
 

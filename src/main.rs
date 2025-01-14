@@ -7,31 +7,30 @@
 #![feature(abi_avr_interrupt)]
 #![feature(future_join)]
 
-mod timer;
 mod button;
-mod limit_switch;
-mod joystick;
-mod game;
-mod executor;
-mod stepper;
 mod channel;
+mod executor;
+mod game;
+mod joystick;
+mod limit_switch;
+mod stepper;
+mod timer;
 
 #[allow(unused_imports)]
 use panic_halt as _;
 
-use core::cell::{Cell, RefCell};
-use arduino_hal::hal::port::{Dynamic, PB0, PB1, PB2, PB3, PB7, PJ0, PJ1, PK0, PK1, PK2};
-use arduino_hal::port::mode::{Input, Output, PullUp, PwmOutput};
-use arduino_hal::port::Pin;
-use arduino_hal::simple_pwm::{IntoPwmPin, Timer3Pwm};
-use arduino_hal::simple_pwm::Prescaler::Prescale64;
-use crate::timer::{GenericTicker, PrecisionTicker};
-use avr_device::interrupt;
 use crate::game::Game;
+use crate::timer::{GenericTicker, PrecisionTicker};
+use arduino_hal::hal::port::Dynamic;
+use arduino_hal::port::mode::{Input, PullUp};
+use arduino_hal::port::Pin;
+use arduino_hal::simple_pwm::Prescaler::Prescale64;
+use arduino_hal::simple_pwm::{IntoPwmPin, Timer3Pwm};
+use avr_device::interrupt;
+use core::cell::{Cell, RefCell};
 
 type Mutex<T> = interrupt::Mutex<T>;
 type Console = arduino_hal::hal::usart::Usart0<arduino_hal::DefaultClock>;
-
 
 /*
 PIN Configuration:
@@ -106,8 +105,6 @@ static Z_LIMIT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Ce
 /// Create a console that can be used safely within an interrupt
 static CONSOLE: Mutex<RefCell<Option<Console>>> = Mutex::new(RefCell::new(None));
 
-
-
 /**
 Entrypoint for the Program
 */
@@ -120,10 +117,8 @@ fn main() -> ! {
     PrecisionTicker::init(dp.TC0);
     GenericTicker::init(dp.TC1);
 
-
     // create a serial connection with the console output
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
-
 
     let x_stepper_pulse = pins.d22.into_output().downgrade();
 
@@ -142,6 +137,8 @@ fn main() -> ! {
     let z_stepper_direction = pins.d29.into_output().downgrade();
 
     let timer3 = Timer3Pwm::new(dp.TC3, Prescale64);
+
+    #[allow(unused_mut)]
     let mut claw_pwm = pins.d5.into_output().into_pwm(&timer3);
 
     // even tough interrupts are not enabled yet still have to create critical section for mutex
@@ -151,28 +148,40 @@ fn main() -> ! {
         *CONSOLE.borrow(cs).borrow_mut() = Some(serial);
 
         // set input pins
-        J_RIGHT.borrow(cs).set(Some(pins.d50.into_pull_up_input().downgrade()));
-        J_LEFT.borrow(cs).set(Some(pins.d51.into_pull_up_input().downgrade()));
-        J_FORWARD.borrow(cs).set(Some(pins.d52.into_pull_up_input().downgrade()));
-        J_BACKWARD.borrow(cs).set(Some(pins.d53.into_pull_up_input().downgrade()));
+        J_RIGHT
+            .borrow(cs)
+            .set(Some(pins.d50.into_pull_up_input().downgrade()));
+        J_LEFT
+            .borrow(cs)
+            .set(Some(pins.d51.into_pull_up_input().downgrade()));
+        J_FORWARD
+            .borrow(cs)
+            .set(Some(pins.d52.into_pull_up_input().downgrade()));
+        J_BACKWARD
+            .borrow(cs)
+            .set(Some(pins.d53.into_pull_up_input().downgrade()));
 
-        B_START.borrow(cs).set(Some(pins.d15.into_pull_up_input().downgrade()));
-        B_END.borrow(cs).set(Some(pins.d14.into_pull_up_input().downgrade()));
+        B_START
+            .borrow(cs)
+            .set(Some(pins.d15.into_pull_up_input().downgrade()));
+        B_END
+            .borrow(cs)
+            .set(Some(pins.d14.into_pull_up_input().downgrade()));
 
-        X_LIMIT.borrow(cs).set(Some(pins.a8.into_pull_up_input().downgrade()));
-        Y_LIMIT.borrow(cs).set(Some(pins.a9.into_pull_up_input().downgrade()));
-
+        X_LIMIT
+            .borrow(cs)
+            .set(Some(pins.a8.into_pull_up_input().downgrade()));
+        Y_LIMIT
+            .borrow(cs)
+            .set(Some(pins.a9.into_pull_up_input().downgrade()));
     });
 
     // enable interrupts for the device
     unsafe { interrupt::enable() };
 
-    let  exint = dp.EXINT;
+    let exint = dp.EXINT;
 
-    let mut game = Game::new(
-        exint,
-
-    );
+    let mut game = Game::new(exint);
     game.run(
         x_stepper_pulse,
         x_stepper_direction,
@@ -182,6 +191,6 @@ fn main() -> ! {
         y_stepper_direction_inverted,
         z_stepper_pulse,
         z_stepper_direction,
-        claw_pwm
+        claw_pwm,
     );
 }

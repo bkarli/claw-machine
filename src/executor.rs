@@ -1,9 +1,9 @@
-use core::task::{Context, RawWaker, RawWakerVTable, Waker};
+use avr_device::asm::sleep;
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::Ordering;
 use core::sync::atomic::AtomicU8;
-use avr_device::asm::sleep;
+use core::sync::atomic::Ordering;
+use core::task::{Context, RawWaker, RawWakerVTable, Waker};
 
 static NUM_TASKS: AtomicU8 = AtomicU8::new(0);
 static TASK_Q: heapless::mpmc::Q16<usize> = heapless::mpmc::Q16::new();
@@ -25,29 +25,26 @@ impl ExtWaker for Waker {
 }
 
 fn get_waker(task: usize) -> Waker {
-    unsafe {
-        Waker::from_raw(RawWaker::new(task as *const(), &VTABLE))
-    }
+    unsafe { Waker::from_raw(RawWaker::new(task as *const (), &VTABLE)) }
 }
 
-unsafe fn clone(ptr: *const()) -> RawWaker {
+unsafe fn clone(ptr: *const ()) -> RawWaker {
     RawWaker::new(ptr, &VTABLE)
 }
 
 unsafe fn drop(_ptr: *const ()) {}
 
-unsafe fn wake(ptr: *const()) {
+unsafe fn wake(ptr: *const ()) {
     wake_task(ptr as usize)
 }
 
-unsafe fn wake_by_ref(ptr: *const()) {
+unsafe fn wake_by_ref(ptr: *const ()) {
     wake_task(ptr as usize)
 }
-
 
 /**
-    If wake task is called if invalid INVALID_TASK_ID loop will break
-    otherwise the task registered with that index will make progress
+If wake task is called if invalid INVALID_TASK_ID loop will break
+otherwise the task registered with that index will make progress
 */
 pub fn wake_task(task: usize) {
     if TASK_Q.enqueue(task).is_err() {
@@ -59,10 +56,9 @@ pub fn wake_task(task: usize) {
 /// the loop will break and the game will advance to the next state
 const INVALID_TASK_ID: usize = 0xFFFF;
 
-
 /**
-    this function will run all registered tasks
-    once the loop breaks the game advances to the next state
+this function will run all registered tasks
+once the loop breaks the game advances to the next state
 */
 pub fn run_task(tasks: &mut [Pin<&mut dyn Future<Output = ()>>]) {
     NUM_TASKS.store(tasks.len() as u8, Ordering::Relaxed);

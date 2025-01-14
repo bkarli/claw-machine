@@ -3,11 +3,9 @@
 //!
 //! The ISR manages whether a button should be pressable or not
 
-
-
-use avr_device::interrupt;
-use crate::{B_END, B_START};
 use crate::executor::wake_task;
+use crate::{B_END, B_START};
+use avr_device::interrupt;
 
 /**
 Pin Change interrupt triggered if a game button has been pressed
