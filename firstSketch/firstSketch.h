@@ -1,4 +1,4 @@
 #ifndef STATESTAB_H
 #define STATESTAB_H
-enum States {IDLE, RUNNING};
+enum States {IDLE, RUNNING, DROPPING, LIFTING, RETURNING};
 #endif
