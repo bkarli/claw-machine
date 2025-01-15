@@ -50,7 +50,6 @@ void loop() {
   //read input buttons
   startButton = digitalRead(buttonPinStart);
   endButton = digitalRead(buttonPinEnd);
-  //if state is idle make sure steppers finish moving to idle state
   switch (state){
     case 0: //IDLE
       //let all steppers move if they have to
