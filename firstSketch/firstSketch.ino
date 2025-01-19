@@ -45,6 +45,7 @@ void setup() {
 
 void loop() {
   //read input buttons
+<<<<<<< HEAD
   int startButton = digitalRead(buttonPinStart);
   int endButton = digitalRead(buttonPinEnd);
   destinationY = stepperYOne.currentPosition();
