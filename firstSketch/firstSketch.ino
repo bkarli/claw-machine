@@ -45,14 +45,12 @@ void setup() {
 
 void loop() {
   //read input buttons
-<<<<<<< HEAD
   int startButton = digitalRead(buttonPinStart);
   int endButton = digitalRead(buttonPinEnd);
   destinationY = stepperYOne.currentPosition();
   destinationX = stepperX.currentPosition();
   checkForEmergency();
 
-  //if state is idle make sure steppers finish moving to idle state
   switch (state){
     case 0: //IDLE
       //if they are finished moving and start button is pressed switch state
