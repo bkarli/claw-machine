@@ -64,7 +64,7 @@ impl JoystickSwitch {
                         .get(self.switch_index)
                         .unwrap()
                         .borrow(cs)
-                        .replace(cx.waker().task());
+                        .replace(cx.waker().task_id());
                 });
                 Poll::Pending
             }

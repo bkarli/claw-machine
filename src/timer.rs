@@ -136,7 +136,7 @@ impl Future for GenericTimer {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state {
             TimerState::Init => {
-                self.register(cx.waker().task());
+                self.register(cx.waker().task_id());
                 self.state = TimerState::Waiting;
                 Poll::Pending
             }

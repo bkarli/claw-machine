@@ -7,27 +7,27 @@
 #![feature(abi_avr_interrupt)]
 #![feature(future_join)]
 
-mod button;
 mod channel;
 mod executor;
-mod game;
 mod joystick;
-mod limit_switch;
 mod stepper;
 mod timer;
 
 #[allow(unused_imports)]
 use panic_halt as _;
 
-use crate::game::Game;
 use crate::timer::{GenericTicker, PrecisionTicker};
 use arduino_hal::hal::port::Dynamic;
-use arduino_hal::port::mode::{Input, PullUp};
+use arduino_hal::port::mode::{Input, Output, PullUp};
 use arduino_hal::port::Pin;
-use arduino_hal::simple_pwm::Prescaler::Prescale64;
-use arduino_hal::simple_pwm::{IntoPwmPin, Timer3Pwm};
+use arduino_hal::simple_pwm::{IntoPwmPin};
 use avr_device::interrupt;
 use core::cell::{Cell, RefCell};
+use core::pin::pin;
+use crate::channel::{Channel, Receiver, Sender};
+use crate::joystick::{JoystickDirection, JoystickSwitch};
+use crate::stepper::{Stepper, StepperDirection};
+use crate::stepper::StepperDirection::{ClockWise, CounterClockWise, Idle};
 
 type Mutex<T> = interrupt::Mutex<T>;
 type Console = arduino_hal::hal::usart::Usart0<arduino_hal::DefaultClock>;
@@ -85,22 +85,6 @@ static J_FORWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(
 /// Joystick Backward input Pin
 static J_BACKWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
 
-// Button Pins
-/// UI Button start input Pin
-static B_START: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
-
-/// UI Button end input Pin
-static B_END: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
-
-// Limit switch Pins
-/// Limit switch X
-static X_LIMIT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
-
-/// Limit switch Y
-static Y_LIMIT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
-
-/// Limit switch Z
-static Z_LIMIT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
 
 /// Create a console that can be used safely within an interrupt
 static CONSOLE: Mutex<RefCell<Option<Console>>> = Mutex::new(RefCell::new(None));
@@ -124,22 +108,6 @@ fn main() -> ! {
 
     let x_stepper_direction = pins.d23.into_output().downgrade();
 
-    let y_stepper_pulse = pins.d24.into_output().downgrade();
-
-    let y_stepper_direction = pins.d25.into_output().downgrade();
-
-    let y_stepper_pulse_inverted = pins.d26.into_output().downgrade();
-
-    let y_stepper_direction_inverted = pins.d27.into_output().downgrade();
-
-    let z_stepper_pulse = pins.d28.into_output().downgrade();
-
-    let z_stepper_direction = pins.d29.into_output().downgrade();
-
-    let timer3 = Timer3Pwm::new(dp.TC3, Prescale64);
-
-    #[allow(unused_mut)]
-    let mut claw_pwm = pins.d5.into_output().into_pwm(&timer3);
 
     // even tough interrupts are not enabled yet still have to create critical section for mutex
     // set all static variables
@@ -161,36 +129,63 @@ fn main() -> ! {
             .borrow(cs)
             .set(Some(pins.d53.into_pull_up_input().downgrade()));
 
-        B_START
-            .borrow(cs)
-            .set(Some(pins.d15.into_pull_up_input().downgrade()));
-        B_END
-            .borrow(cs)
-            .set(Some(pins.d14.into_pull_up_input().downgrade()));
-
-        X_LIMIT
-            .borrow(cs)
-            .set(Some(pins.a8.into_pull_up_input().downgrade()));
-        Y_LIMIT
-            .borrow(cs)
-            .set(Some(pins.a9.into_pull_up_input().downgrade()));
     });
 
     // enable interrupts for the device
     unsafe { interrupt::enable() };
 
     let exint = dp.EXINT;
+    exint.pcicr.write(|w| unsafe { w.bits(0b011) });
+    // Joystick pc interrupt pins
+    exint.pcmsk0.write(|w| w.bits(0b00001111));
+    let x_channel: Channel<StepperDirection> = Channel::new();
+    let joystick_right_task = pin!(joystick_switch_task(
+                        JoystickDirection::RIGHT,
+                        x_channel.get_sender()
+                    ));
+    let joystick_left_task = pin!(joystick_switch_task(
+                        JoystickDirection::LEFT,
+                        x_channel.get_sender()
+                    ));
 
-    let mut game = Game::new(exint);
-    game.run(
-        x_stepper_pulse,
-        x_stepper_direction,
-        y_stepper_pulse,
-        y_stepper_direction,
-        y_stepper_pulse_inverted,
-        y_stepper_direction_inverted,
-        z_stepper_pulse,
-        z_stepper_direction,
-        claw_pwm,
-    );
+    let x_stepper_task = pin!(stepper_task_x(x_stepper_pulse, x_stepper_direction,x_channel.get_receiver()));
+    executor::run_task(&mut [joystick_right_task,joystick_left_task,x_stepper_task])
+}
+
+
+async fn stepper_task_x(
+    stepper_pin: Pin<Output>,
+    direction_pin: Pin<Output>,
+    mut receiver: Receiver<'_, StepperDirection>,
+) {
+    let mut motor = Stepper::new(stepper_pin, direction_pin, false);
+    loop {
+        let direction = receiver.receive().await;
+        motor.move_direction(direction,1000).await;
+    }
+}
+
+async fn joystick_switch_task(
+    direction: JoystickDirection,
+    motor_sender: Sender<'_, StepperDirection>,
+) {
+    let (index, stepper_direction): (usize, StepperDirection) = match direction {
+        JoystickDirection::RIGHT => (0usize, CounterClockWise),
+        JoystickDirection::LEFT => (1usize, ClockWise),
+        JoystickDirection::FORWARD => (2usize, CounterClockWise),
+        JoystickDirection::BACKWARD => (3usize, ClockWise),
+    };
+
+    let mut joystick_switch = JoystickSwitch::new(direction, index);
+
+    loop {
+        // wait for a low state
+        joystick_switch.wait_for(false).await;
+
+        motor_sender.send(stepper_direction);
+
+        // wait for a high state
+        joystick_switch.wait_for(true).await;
+        motor_sender.send(Idle);
+    }
 }

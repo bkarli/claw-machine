@@ -4,17 +4,16 @@ use core::pin::Pin;
 use core::sync::atomic::AtomicU8;
 use core::sync::atomic::Ordering;
 use core::task::{Context, RawWaker, RawWakerVTable, Waker};
-
 static NUM_TASKS: AtomicU8 = AtomicU8::new(0);
 static TASK_Q: heapless::mpmc::Q16<usize> = heapless::mpmc::Q16::new();
 static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
 
 pub trait ExtWaker {
-    fn task(&self) -> usize;
+    fn task_id(&self) -> usize;
 }
 
 impl ExtWaker for Waker {
-    fn task(&self) -> usize {
+    fn task_id(&self) -> usize {
         for task_id in 0..NUM_TASKS.load(Ordering::Relaxed) {
             if get_waker(task_id as usize).will_wake(self) {
                 return task_id as usize;
@@ -60,21 +59,15 @@ const INVALID_TASK_ID: usize = 0xFFFF;
 this function will run all registered tasks
 once the loop breaks the game advances to the next state
 */
-pub fn run_task(tasks: &mut [Pin<&mut dyn Future<Output = ()>>]) {
+pub fn run_task(tasks: &mut [Pin<&mut dyn Future<Output = ()>>]) -> ! {
     NUM_TASKS.store(tasks.len() as u8, Ordering::Relaxed);
     for task in 0..tasks.len() {
         TASK_Q.enqueue(task).ok();
     }
-
-    let mut next_state = false;
-    while !next_state {
+    loop {
         // while there is a task in queue
         while let Some(task) = TASK_Q.dequeue() {
             // check if the task is a breaker task and exit loop
-            if task == INVALID_TASK_ID {
-                next_state = true;
-                break;
-            }
 
             // get task from array and make progress at that task
             let _ = tasks[task]
