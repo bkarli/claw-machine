@@ -1,9 +1,10 @@
 use avr_device::interrupt;
 use core::cell::RefCell;
+use core::fmt;
 use core::future::poll_fn;
 use core::task::Poll;
-
-use crate::channel::Sender;
+use ufmt::derive::uDebug;
+use ufmt::{uWrite, Formatter};
 use crate::executor::{wake_task, ExtWaker};
 use crate::stepper::StepperDirection;
 use crate::stepper::StepperDirection::{ClockWise, CounterClockWise, Idle};
@@ -30,6 +31,7 @@ pub enum JoystickDirection {
     FORWARD,
     BACKWARD,
 }
+
 
 impl JoystickSwitch {
     pub fn new(joystick_direction: JoystickDirection, switch_index: usize) -> Self {
@@ -64,7 +66,7 @@ impl JoystickSwitch {
                         .get(self.switch_index)
                         .unwrap()
                         .borrow(cs)
-                        .replace(cx.waker().task());
+                        .replace(cx.waker().task_id());
                 });
                 Poll::Pending
             }
@@ -104,27 +106,3 @@ fn PCINT0() {
     });
 }
 
-pub async fn joystick_switch_task(
-    direction: JoystickDirection,
-    motor_sender: Sender<'_, StepperDirection>,
-) {
-    let (index, stepper_direction): (usize, StepperDirection) = match direction {
-        JoystickDirection::RIGHT => (0usize, CounterClockWise),
-        JoystickDirection::LEFT => (1usize, ClockWise),
-        JoystickDirection::FORWARD => (2usize, CounterClockWise),
-        JoystickDirection::BACKWARD => (3usize, ClockWise),
-    };
-
-    let mut joystick_switch = JoystickSwitch::new(direction, index);
-
-    loop {
-        // wait for a low state
-        joystick_switch.wait_for(false).await;
-
-        motor_sender.send(stepper_direction);
-
-        // wait for a high state
-        joystick_switch.wait_for(true).await;
-        motor_sender.send(Idle);
-    }
-}
