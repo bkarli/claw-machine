@@ -134,58 +134,22 @@ fn main() -> ! {
     // enable interrupts for the device
     unsafe { interrupt::enable() };
 
-    let exint = dp.EXINT;
-    exint.pcicr.write(|w| unsafe { w.bits(0b011) });
-    // Joystick pc interrupt pins
-    exint.pcmsk0.write(|w| w.bits(0b00001111));
-    let x_channel: Channel<StepperDirection> = Channel::new();
-    let joystick_right_task = pin!(joystick_switch_task(
-                        JoystickDirection::RIGHT,
-                        x_channel.get_sender()
-                    ));
-    let joystick_left_task = pin!(joystick_switch_task(
-                        JoystickDirection::LEFT,
-                        x_channel.get_sender()
-                    ));
-
-    let x_stepper_task = pin!(stepper_task_x(x_stepper_pulse, x_stepper_direction,x_channel.get_receiver()));
-    executor::run_task(&mut [joystick_right_task,joystick_left_task,x_stepper_task])
+    let test_stepper = pin!(test_async_stepper(x_stepper_direction, x_stepper_pulse));
+    executor::run_task(&mut [test_stepper])
 }
 
-
-async fn stepper_task_x(
-    stepper_pin: Pin<Output>,
-    direction_pin: Pin<Output>,
-    mut receiver: Receiver<'_, StepperDirection>,
+async fn test_async_stepper(
+    direction_pin : Pin<Output, Dynamic>,
+    pulse_pin: Pin<Output, Dynamic>
 ) {
-    let mut motor = Stepper::new(stepper_pin, direction_pin, false);
+    let mut motor = Stepper::new(direction_pin, pulse_pin, false);
     loop {
-        let direction = receiver.receive().await;
-        motor.move_direction(direction,1000).await;
-    }
-}
+        for _ in 0..200 {
+            motor.move_direction(ClockWise, 1000).await
+        }
 
-async fn joystick_switch_task(
-    direction: JoystickDirection,
-    motor_sender: Sender<'_, StepperDirection>,
-) {
-    let (index, stepper_direction): (usize, StepperDirection) = match direction {
-        JoystickDirection::RIGHT => (0usize, CounterClockWise),
-        JoystickDirection::LEFT => (1usize, ClockWise),
-        JoystickDirection::FORWARD => (2usize, CounterClockWise),
-        JoystickDirection::BACKWARD => (3usize, ClockWise),
-    };
-
-    let mut joystick_switch = JoystickSwitch::new(direction, index);
-
-    loop {
-        // wait for a low state
-        joystick_switch.wait_for(false).await;
-
-        motor_sender.send(stepper_direction);
-
-        // wait for a high state
-        joystick_switch.wait_for(true).await;
-        motor_sender.send(Idle);
+        for _ in 0..200 {
+            motor.move_direction(CounterClockWise, 400).await
+        }
     }
 }
