@@ -90,7 +90,7 @@ impl GenericTicker {
         interrupt::free(|cs| G_TICK_COUNTER.borrow(cs).get())
     }
 
-    pub fn millis() -> u64 {
+    pub fn seconds() -> u64 {
         let ticks = Self::now();
         Self::millis_from_ticks(ticks)
     }
@@ -276,6 +276,15 @@ pub struct PrecisionTicker {
 impl PrecisionTicker {
     fn now() -> u64 {
         interrupt::free(|cs| P_TICK_COUNTER.borrow(cs).get())
+    }
+
+    pub fn millis() -> u64 {
+        let ticks = Self::now();
+        Self::from_ticks_to_millis(ticks)
+    }
+
+    fn from_ticks_to_millis(ticks: u64) -> u64 {
+        ticks / 250
     }
 }
 

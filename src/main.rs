@@ -15,7 +15,7 @@ mod timer;
 #[allow(unused_imports)]
 use panic_halt as _;
 
-use crate::timer::{delay_s, GenericTicker, GenericTimer, PrecisionTicker};
+use crate::timer::{delay_s, delay_us, GenericTicker, PrecisionTicker};
 
 use arduino_hal::simple_pwm::{IntoPwmPin};
 use avr_device::interrupt;
@@ -91,28 +91,54 @@ fn main() -> ! {
     interrupt::free(|cs| {
         *CONSOLE.borrow(cs).borrow_mut() = Some(serial);
     });
-    let test_task = pin!(test_generic_timer());
-    executor::run_task(&mut [test_task]);
+    let test_generic_timer = pin!(test_generic_timer());
+    let test_precision_timer = pin!(test_precision_timer());
+    executor::run_task(&mut [test_generic_timer, test_precision_timer]);
 }
 
 
 async fn test_generic_timer() {
-    let start = GenericTicker::millis();
+    let start = GenericTicker::seconds();
     delay_s(1).await;
-    let end = GenericTicker::millis();
+    let end = GenericTicker::seconds();
 
     interrupt::free(|cs|{
         if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
-            let _ = ufmt::uwriteln!(console, "Time out took {} ms", end - start);
+            let _ = ufmt::uwriteln!(console, "Generic time took {} ms", end - start);
         }
     });
-    let start = GenericTicker::millis();
+    let start = GenericTicker::seconds();
     delay_s(10).await;
-    let end = GenericTicker::millis();
+    let end = GenericTicker::seconds();
 
     interrupt::free(|cs|{
         if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
-            let _ = ufmt::uwriteln!(console, "Time out took {} ms", end - start);
+            let _ = ufmt::uwriteln!(console, "Generic time out took {} ms", end - start);
+        }
+    });
+}
+
+
+async fn test_precision_timer(){
+    let start = PrecisionTicker::millis();
+    // timeout one millisecond
+    delay_us(1000).await;
+    let end = PrecisionTicker::millis();
+
+    interrupt::free(|cs|{
+        if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
+            let _ = ufmt::uwriteln!(console, "Precision time out took {} ms", end - start);
+        }
+    });
+    let start = PrecisionTicker::millis();
+    for _ in 0..50 {
+        delay_us(1000).await;
+    }
+    let end = PrecisionTicker::millis();
+
+    interrupt::free(|cs|{
+        if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
+            let _ = ufmt::uwriteln!(console, "Precision time out took {} ms", end - start);
         }
     });
 }
