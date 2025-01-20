@@ -68,7 +68,6 @@ OUTPUT:
         8. Z-Direction: 29
 
     Servo Motor
-
         1. Claw: 5 (PWM)
 */
 

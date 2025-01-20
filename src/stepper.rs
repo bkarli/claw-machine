@@ -12,7 +12,7 @@ use core::future::join;
 use embedded_hal::digital::OutputPin;
 use futures::select_biased;
 
-const MAX_STEPS: u32 = 6000;
+const MAX_STEPS: u32 = 400;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum StepperDirection {
@@ -45,7 +45,7 @@ impl Stepper {
     /**
     Steps the motor in one direction with a pulse width or variable timeout
     */
-    pub async fn move_direction(&mut self, direction: StepperDirection, pulse_width: u16) {
+    pub async fn move_direction(&mut self, direction: StepperDirection, pulse_width: u32) {
         match direction {
             ClockWise => {
                 if self.max > MAX_STEPS {
