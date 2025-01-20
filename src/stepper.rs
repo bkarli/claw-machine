@@ -54,6 +54,7 @@ impl Stepper {
                 self.pulse_pin.set_high();
                 delay_us(pulse_width).await;
                 self.pulse_pin.set_low();
+                delay_us(pulse_width).await;
                 self.max += 1
             }
             CounterClockWise => {
@@ -65,6 +66,7 @@ impl Stepper {
                 delay_us(pulse_width).await;
                 self.pulse_pin.set_low();
                 self.direction_pin.set_low();
+                delay_us(pulse_width).await;
                 self.max -= 1
             }
             _ => {}
