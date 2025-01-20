@@ -103,9 +103,9 @@ fn main() -> ! {
     // create a serial connection with the console output
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
 
-    let x_stepper_pulse = pins.d22.into_output().downgrade();
+    let x_stepper_pulse = pins.d27.into_output().downgrade();
 
-    let x_stepper_direction = pins.d23.into_output().downgrade();
+    let x_stepper_direction = pins.d26.into_output().downgrade();
 
 
     // even tough interrupts are not enabled yet still have to create critical section for mutex
@@ -142,13 +142,13 @@ async fn test_async_stepper(
     pulse_pin: Pin<Output, Dynamic>
 ) {
     let mut motor = Stepper::new(direction_pin, pulse_pin, false);
-    loop {
-        for _ in 0..200 {
-            motor.move_direction(ClockWise, 1000).await
-        }
 
-        for _ in 0..200 {
-            motor.move_direction(CounterClockWise, 400).await
-        }
+    for _ in 0..200 {
+        motor.move_direction(ClockWise, 2000).await
     }
+
+    for _ in 0..200 {
+        motor.move_direction(CounterClockWise, 2000).await
+    }
+
 }
