@@ -22,6 +22,7 @@ use arduino_hal::simple_pwm::{IntoPwmPin};
 use avr_device::interrupt;
 use core::cell::{Cell, RefCell};
 use core::pin::pin;
+use avr_device::interrupt::CriticalSection;
 use crate::joystick::{JoystickDirection, JoystickSwitch};
 use crate::stepper::StepperDirection;
 use crate::stepper::StepperDirection::{ClockWise, CounterClockWise};
@@ -71,16 +72,16 @@ OUTPUT:
 
 // Joy stick Pins
 /// Joystick Right input Pin
-static J_RIGHT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_RIGHT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Left input Pin
-static J_LEFT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_LEFT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Forward input Pin
-static J_FORWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_FORWARD: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Backward input Pin
-static J_BACKWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_BACKWARD: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 
 /// Create a console that can be used safely within an interrupt
@@ -107,18 +108,10 @@ fn main() -> ! {
         *CONSOLE.borrow(cs).borrow_mut() = Some(serial);
 
         // set input pins
-        J_RIGHT
-            .borrow(cs)
-            .set(Some(pins.d50.into_pull_up_input().downgrade()));
-        J_LEFT
-            .borrow(cs)
-            .set(Some(pins.d51.into_pull_up_input().downgrade()));
-        J_FORWARD
-            .borrow(cs)
-            .set(Some(pins.d52.into_pull_up_input().downgrade()));
-        J_BACKWARD
-            .borrow(cs)
-            .set(Some(pins.d53.into_pull_up_input().downgrade()));
+        *J_RIGHT.borrow(cs).borrow_mut() = Some(pins.d50.into_pull_up_input().downgrade());
+        *J_LEFT.borrow(cs).borrow_mut() = Some(pins.d51.into_pull_up_input().downgrade());
+        *J_FORWARD.borrow(cs).borrow_mut() = Some(pins.d52.into_pull_up_input().downgrade());
+        *J_BACKWARD.borrow(cs).borrow_mut() = Some(pins.d53.into_pull_up_input().downgrade());
 
     });
 
@@ -136,13 +129,13 @@ fn main() -> ! {
                         JoystickDirection::BACKWARD,
                     ));
 
-    let exint = dp.EXINT;
-    exint.pcicr.write(|w| unsafe { w.bits(0b011) });
-    // Joystick pc interrupt pins
-    exint.pcmsk0.write(|w| w.bits(0b00001111));
 
     // enable interrupts for the device
     unsafe { interrupt::enable() }
+    let exint = dp.EXINT;
+    exint.pcicr.write(|w| unsafe { w.bits(0b111) });
+    // Joystick pc interrupt pins
+    exint.pcmsk0.write(|w| w.bits(0b11111111));
 
     executor::run_task(&mut [joystick_right_task,joystick_left_task,joystick_forward_task,joystick_backward_task])
 
@@ -164,7 +157,6 @@ pub async fn test_joy_stick(
     loop {
         // wait for a low state
         joystick_switch.wait_for(false).await;
-
         interrupt::free(|cs| {
             if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
                 match direction {
@@ -183,6 +175,7 @@ pub async fn test_joy_stick(
                 }
             }
         });
+        // todo debounce
 
         // wait for a high state
         joystick_switch.wait_for(true).await;
@@ -204,5 +197,6 @@ pub async fn test_joy_stick(
                 }
             }
         });
+
     }
 }

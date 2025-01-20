@@ -1,24 +1,26 @@
 use avr_device::interrupt;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::fmt;
 use core::future::poll_fn;
 use core::task::Poll;
+use avr_device::interrupt::CriticalSection;
 use ufmt::derive::uDebug;
 use ufmt::{uWrite, Formatter};
 use crate::executor::{wake_task, ExtWaker};
 use crate::stepper::StepperDirection;
 use crate::stepper::StepperDirection::{ClockWise, CounterClockWise, Idle};
-use crate::{Mutex, J_BACKWARD, J_FORWARD, J_LEFT, J_RIGHT};
+use crate::{Mutex, CONSOLE, J_BACKWARD, J_FORWARD, J_LEFT, J_RIGHT};
 
-static JOYSTICK_SWITCH_TASKS: [Mutex<RefCell<usize>>; 4] = [
-    Mutex::new(RefCell::new(0xFFFF)),
-    Mutex::new(RefCell::new(0xFFFF)),
-    Mutex::new(RefCell::new(0xFFFF)),
-    Mutex::new(RefCell::new(0xFFFF)),
+static JOYSTICK_SWITCH_TASKS: [Mutex<Cell<usize>>; 4] = [
+    Mutex::new(Cell::new(0xFFFF)),
+    Mutex::new(Cell::new(0xFFFF)),
+    Mutex::new(Cell::new(0xFFFF)),
+    Mutex::new(Cell::new(0xFFFF)),
 ];
 
+/// all states should be high at the start
 static JOYSTICK_SWITCH_STATES: Mutex<RefCell<[bool; 4]>> =
-    Mutex::new(RefCell::new([false, false, false, false]));
+    Mutex::new(RefCell::new([true, true, true, true]));
 pub struct JoystickSwitch {
     joystick_direction: JoystickDirection,
     switch_index: usize,
@@ -46,16 +48,16 @@ impl JoystickSwitch {
             if interrupt::free(|cs| {
                 return match self.joystick_direction {
                     JoystickDirection::RIGHT => {
-                        desired_state == J_RIGHT.borrow(cs).take().unwrap().is_high()
+                        desired_state == J_RIGHT.borrow(cs).borrow_mut().as_ref().unwrap().is_high()
                     }
                     JoystickDirection::LEFT => {
-                        desired_state == J_LEFT.borrow(cs).take().unwrap().is_high()
+                        desired_state == J_LEFT.borrow(cs).borrow_mut().as_ref().unwrap().is_high()
                     }
                     JoystickDirection::FORWARD => {
-                        desired_state == J_FORWARD.borrow(cs).take().unwrap().is_high()
+                        desired_state == J_FORWARD.borrow(cs).borrow_mut().as_ref().unwrap().is_high()
                     }
                     JoystickDirection::BACKWARD => {
-                        desired_state == J_BACKWARD.borrow(cs).take().unwrap().is_high()
+                        desired_state == J_BACKWARD.borrow(cs).borrow_mut().as_ref().unwrap().is_high()
                     }
                 };
             }) {
@@ -67,6 +69,13 @@ impl JoystickSwitch {
                         .unwrap()
                         .borrow(cs)
                         .replace(cx.waker().task_id());
+
+                    // replace the desired state of the array
+                    let mut states = JOYSTICK_SWITCH_STATES
+                        .borrow(cs)
+                        .borrow_mut();
+                    states[self.switch_index] = desired_state;
+
                 });
                 Poll::Pending
             }
@@ -84,25 +93,45 @@ fn PCINT0() {
     // We don't actually need to create a critical section as AVR suppresses other interrupts during
     // an interrupt
     interrupt::free(|cs| {
-        let right_pin = J_RIGHT.borrow(cs).take().unwrap().downgrade();
-        let left_pin = J_LEFT.borrow(cs).take().unwrap().downgrade();
-        let forward_pin = J_FORWARD.borrow(cs).take().unwrap().downgrade();
-        let backward_pin = J_BACKWARD.borrow(cs).take().unwrap().downgrade();
-        let joystick_states = JOYSTICK_SWITCH_STATES.borrow(cs).borrow_mut();
-        let pins = [right_pin, left_pin, forward_pin, backward_pin];
-
-        for (index, switch_state) in joystick_states.iter().enumerate() {
-            if pins.get(index).unwrap().is_high() != *switch_state {
-                let joystick_task = JOYSTICK_SWITCH_TASKS
-                    .get(index)
-                    .unwrap()
-                    .borrow(cs)
-                    .replace(0xFFFF);
-                if joystick_task != 0xFFFF {
-                    wake_task(joystick_task)
+        let states = JOYSTICK_SWITCH_STATES.borrow(cs);
+        if let Some(right_pin) = J_RIGHT.borrow(cs).borrow_mut().as_ref() {
+            let state = states.borrow().as_ref()[0];
+            if right_pin.is_high() == states.borrow().as_ref()[0] {
+                let task_id = JOYSTICK_SWITCH_TASKS[0].borrow(cs).replace(0xFFFF);
+                if task_id != 0xFFFF {
+                    wake_task(task_id)
                 }
             }
-        }
+        };
+        if let Some(left_pin) = J_LEFT.borrow(cs).borrow_mut().as_ref(){
+            let state = states.borrow().as_ref()[1];
+            if left_pin.is_high() == state {
+                let task_id = JOYSTICK_SWITCH_TASKS[1].borrow(cs).replace(0xFFFF);
+                if task_id != 0xFFFF {
+                    states.borrow_mut().as_mut()[3] != state;
+                    wake_task(task_id)
+                }
+            }
+        };
+        if let Some(forward_pin) = J_FORWARD.borrow(cs).borrow_mut().as_ref(){
+            let state = states.borrow().as_ref()[2];
+            if forward_pin.is_high()== state {
+                let task_id = JOYSTICK_SWITCH_TASKS[2].borrow(cs).replace(0xFFFF);
+                if task_id != 0xFFFF {
+                    wake_task(task_id)
+                }
+            }
+        };
+        if let Some(backward_pin) = J_BACKWARD.borrow(cs).borrow_mut().as_ref(){
+            let state = states.borrow().as_ref()[3];
+            if backward_pin.is_high() == state {
+                let task_id = JOYSTICK_SWITCH_TASKS[3].borrow(cs).replace(0xFFFF);
+                if task_id != 0xFFFF {
+                    states.borrow_mut().as_mut()[3] != state;
+                    wake_task(task_id)
+                }
+            }
+        };
     });
 }
 
