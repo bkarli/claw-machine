@@ -133,9 +133,9 @@ fn main() -> ! {
     // enable interrupts for the device
     unsafe { interrupt::enable() }
     let exint = dp.EXINT;
-    exint.pcicr.write(|w| unsafe { w.bits(0b111) });
+    exint.pcicr.write(|w| unsafe { w.bits(0b011) });
     // Joystick pc interrupt pins
-    exint.pcmsk0.write(|w| w.bits(0b11111111));
+    exint.pcmsk0.write(|w| w.bits(0b00001111));
 
     executor::run_task(&mut [joystick_right_task,joystick_left_task,joystick_forward_task,joystick_backward_task])
 
