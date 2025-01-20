@@ -19,7 +19,6 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use heapless::binary_heap::{BinaryHeap, Min};
-use crate::CONSOLE;
 use crate::executor::{wake_task, ExtWaker};
 
 // Type alias for avr_device::interrupt::Mutex to Mutex
@@ -216,9 +215,6 @@ fn TIMER1_COMPA() {
         let counter_c = G_TICK_COUNTER.borrow(cs);
         let increment_c = G_TICK_INCREMENT.borrow(cs);
         let counter = counter_c.get() + G_TICK_INCREMENT.borrow(cs).get();
-        if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
-            let _ = ufmt::uwriteln!(console,"interrupt triggered");
-        }
 
         counter_c.set(counter);
         schedule_generic_wakeup(
@@ -237,7 +233,7 @@ Constant conversion that convert microseconds to precision ticks
 
 Min is 1 Tick which is 2.5 microseconds
 */
-const fn us_to_p_ticks(us: u16) -> u16 {
+pub(crate) const fn us_to_p_ticks(us: u32) -> u32 {
     250 * us / 1000
 }
 
@@ -255,7 +251,7 @@ static P_QUEUE: Mutex<RefCell<BinaryHeap<(u64, usize), Min, 8>>> =
 static P_TICK_COUNTER: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
 
 /// A variable tick incrementer
-static P_TICK_INCREMENT: Mutex<Cell<u64>> = Mutex::new(Cell::new(65535));
+static P_TICK_INCREMENT: Mutex<Cell<u64>> = Mutex::new(Cell::new(250));
 
 /**
 Ticker to generate Ticker with microsecond precision used internally to generate Timer Events with
@@ -290,13 +286,13 @@ impl PrecisionTicker {
 
 impl PrecisionTicker {
     pub fn init(tc0: TC0) {
-        // enable CTC (clear timer on compare match)
         tc0.tccr0a.write(|w| w.wgm0().ctc());
-        // choose the prescaler of the counter register
+        tc0.ocr0a.write(|w| w.bits(250u8));
         tc0.tccr0b.write(|w| w.cs0().prescale_64());
-
+        tc0.timsk0.write(|w| w.ocie0a().set_bit());
         // replace tc0
         interrupt::free(|cs| {
+            P_TICK_COUNTER.borrow(cs).set(0);
             P_TICKER.tc0.borrow(cs).replace(Some(tc0));
         })
     }
@@ -308,9 +304,10 @@ pub struct PrecisionTimer {
 }
 
 impl PrecisionTimer {
-    pub fn new(microseconds: u16) -> Self {
+    pub fn new(microseconds: u32) -> Self {
+        let end_ticks = us_to_p_ticks(microseconds) as u64 + PrecisionTicker::now();
         Self {
-            end_ticks: us_to_p_ticks(microseconds) as u64,
+            end_ticks,
             state: TimerState::Init,
         }
     }
@@ -368,10 +365,9 @@ fn schedule_precision_wakeup(
     increment_c: &Cell<u64>)
 {
     // take first of queue
-    // if first end tick - current tick <= 65535 add set ticker delta and modify increment
+    // if first end tick - current tick <= 250 add set ticker delta and modify increment
     while let Some((end_ticks, task)) = queue.peek() {
         let remainder: u64 = *end_ticks - counter;
-
         if remainder <= 250 {
             // if ticks are near 0 another interrupt is not necessary => Wake up task immediately
             if remainder <= 5 {
@@ -401,7 +397,7 @@ fn schedule_precision_wakeup(
 /**
 Public function that delays something for n us
 */
-pub async fn delay_us(us: u16) {
+pub async fn delay_us(us: u32) {
     PrecisionTimer::new(us).await
 }
 
