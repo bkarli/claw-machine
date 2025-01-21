@@ -4,169 +4,172 @@
 #include "firstSketch.h"
 
 //setting pins
-const int joyPinLeft = 1;
-const int joyPinRight = 2;
-const int joyPinForward = 3;
-const int joyPinBackward = 4;
-const int buttonPinStart = 5;
-const int buttonPinEnd = 6;
+const int joyPinLeft = 51;
+const int joyPinRight = 53;
+const int joyPinForward = 50;
+const int joyPinBackward = 52;
+const int buttonPinStart = 44;
+const int buttonPinEnd = 42;
 
 //making steppers
-AccelStepper stepperYOne(AccelStepper::DRIVER, 14, 15);
-AccelStepper stepperYTwo(AccelStepper::DRIVER, 18, 19);
-AccelStepper stepperX(AccelStepper::DRIVER, 22, 23);
-AccelStepper stepperSeil(AccelStepper::DRIVER, 26, 27);
+AccelStepper stepperYOne(AccelStepper::DRIVER, 23, 22);
+AccelStepper stepperYTwo(AccelStepper::DRIVER, 25, 24);
+AccelStepper stepperX(AccelStepper::DRIVER, 27, 26);
+AccelStepper stepperSeil(AccelStepper::DRIVER, 31, 30);
 Servo servoClaw;
 
 //quick access to steppers though arrays
 AccelStepper* steppersXY[] = {&stepperYOne, &stepperYTwo, &stepperX};
 AccelStepper* allSteppers[] = {&stepperYOne, &stepperYTwo, &stepperX, &stepperSeil};
 
+/*
 //more pins
-const int limitSwitchX = 12;
-const int limitSwitchY = 13;
+const int limitSwitchX = A8;
+const int limitSwitchY = A9;
+const int limitSwitchSeil = A10;
+*/
 
-const int stepperSpeed = 400;
+const int stepperSpeed = 600;
 int state;
 
 //placeholders
-signed int maxY = 1600;
-signed int maxX = -1600;
+signed int maxY = 1000;
+signed int maxX = 1000;
 int destinationX;
 int destinationY;
-int servoPos = 0;
+signed int servoPos = 50;
 
 void setup() {
   setPins();
-  setStepperSpeeds(200);
-  servoClaw.attach(7);
-  state = States::RETURNING;
+  setStepperSpeeds(0);
+  servoClaw.attach(5);
+  stepperSeil.moveTo(-1200);
+  openClaw();
+  state = States::IDLE;
+  Serial.begin(9600);
 }
 
 void loop() {
-  //read input buttons
-  int startButton = digitalRead(buttonPinStart);
   int endButton = digitalRead(buttonPinEnd);
+  int startButton = digitalRead(buttonPinStart);
   destinationY = stepperYOne.currentPosition();
   destinationX = stepperX.currentPosition();
-  checkForEmergency();
-
+  //checkForEmergency();
+  for (AccelStepper* runningStepper : steppersXY){
+    runningStepper -> runSpeed();
+  }
   switch (state){
-    case 0: //IDLE
+    case IDLE: //IDLE
+      stepperSeil.run();
       //if they are finished moving and start button is pressed switch state
-      if (startButton == HIGH && clawAndRopeFinished()){
+      if (startButton == LOW && ropeFinished()){
+        Serial.println("game start");
         startGame();
       }
       break;
 
-    case 1: //RUNNING
+    case RUNNING: //RUNNING
       //check if the steppers are still and end button is pressed
-      if (endButton == HIGH && runningMotorsFinished()){
+      if (endButton == LOW){
+        setStepperSpeeds(0);
         endGame();
       // read the joystick input and move the claw motors
       } else {
         readJoystick();
-        //let all the x and y stepper move
-        for (AccelStepper* runningStepper : steppersXY){
-          runningStepper -> runSpeed();
-        }
       }
       break;
 
-    case 2: //DROPPING
+    case DROPPING: //DROPPING
       //let the rope stepper go to its destination
       stepperSeil.run();
       if (ropeFinished()){
+        Serial.println("rope finished");
         //this takes a fixed amount of time and delays all other things
         closeClaw();
         liftClaw();
       }
       break;
 
-    case 3: //LIFTING
+    case LIFTING: //LIFTING
       //let the rope stepper finish moving
       stepperSeil.run();
       if (ropeFinished()){
+        if (endButton == LOW){
+          moveClawToIdle();
+        }else {
+          readJoystick();
+        }
         //return the claw to its original position
-        moveClawToIdle();
       }
       break;
 
-    case 4: //RETURNING
-      int varX = digitalRead(limitSwitchX);
-      int varY = digitalRead(limitSwitchY);
-      if (varX == HIGH){
-        stepperX.stop();
-        stepperX.setCurrentPosition(0);
-        moveClawX(0);
-      } else {
-        moveClawX(100);
-      }
-      if (varY == HIGH){
-        stepperYOne.stop();
-        stepperYTwo.stop();
-        stepperYOne.setCurrentPosition(0);
-        stepperYTwo.setCurrentPosition(0);
-        moveClawY(0);
-      } else {
-        moveClawY(-100);
-      }
-      //let all the x and y steppers move
-      for (AccelStepper* runningStepper : steppersXY){
-        runningStepper -> runSpeed();
-      }
-      //if they have arrived, open the claw and go to idle state
-      if (destinationX == 0 && destinationY == 0){
-        openClaw();
-        changeState(IDLE);
-      }
+    case RETURNING: //RETURNING
+      openClaw();
+      changeState(IDLE);
       break;
   }
 }
 
 // setting the pins to in- / output
 void setPins(){
-  pinMode(joyPinLeft, INPUT);
-  pinMode(joyPinRight, INPUT);
-  pinMode(joyPinForward, INPUT);
-  pinMode(joyPinBackward, INPUT);
+  pinMode(joyPinLeft, INPUT_PULLUP);
+  pinMode(joyPinRight, INPUT_PULLUP);
+  pinMode(joyPinForward, INPUT_PULLUP);
+  pinMode(joyPinBackward, INPUT_PULLUP);
 
-  pinMode(buttonPinStart, INPUT);
-  pinMode(buttonPinEnd, INPUT);
-
-  pinMode(limitSwitchX, INPUT);
-  pinMode(limitSwitchY, INPUT);
+  pinMode(buttonPinStart, INPUT_PULLUP);
+  pinMode(buttonPinEnd, INPUT_PULLUP);
 }
 
 //setting stepper speeds with placeholder speeds
 void setStepperSpeeds(int speed){
-  stepperSeil.setAcceleration(speed);
-  stepperSeil.setMaxSpeed(200);
+  stepperSeil.setAcceleration(800);
+  stepperSeil.setMaxSpeed(400);
+  stepperSeil.setSpeed(200);
   for (AccelStepper* thisStepper : steppersXY){
-    thisStepper -> setSpeed(0);
+    thisStepper -> setMaxSpeed(600);
+    thisStepper -> setAcceleration(1000);
+    thisStepper -> setSpeed(speed);
   }
 }
 
 //reading the joystick inputs and adding to the destination x and y
 void readJoystick(){
-  moveClawY(0);
-  moveClawX(0);
-  if (digitalRead(joyPinForward) == HIGH && digitalRead(joyPinBackward) == LOW){
-    if (destinationY < maxY){
-      moveClawY(stepperSpeed);
+  if (digitalRead(joyPinForward) == LOW && digitalRead(joyPinBackward) == HIGH){
+    if (destinationY <= maxY){
+      speedClawY(stepperSpeed);
+      speedClawX(0);
+    } else {
+      speedClawY(-stepperSpeed);
+      speedClawX(0);
     }
-  } else if (digitalRead(joyPinBackward) == HIGH && digitalRead(joyPinForward) == LOW){
-    if (destinationY > 0){
-      moveClawY(-stepperSpeed);
+  } else if (digitalRead(joyPinBackward) == LOW && digitalRead(joyPinForward) == HIGH){
+    if (-maxY <= destinationY){
+      speedClawY(-stepperSpeed);
+      speedClawX(0);
+    }else {
+      speedClawY(stepperSpeed);
+      speedClawX(0);
     }
-  } else if (digitalRead(joyPinLeft) == HIGH && digitalRead(joyPinRight) == LOW){
-    if (destinationX < 0){
-      moveClawX(stepperSpeed);
+  } else if (digitalRead(joyPinLeft) == LOW && digitalRead(joyPinRight) == HIGH){
+    if (-maxX <= destinationX){
+      speedClawX(-stepperSpeed);
+      speedClawY(0);
+    } else {
+      speedClawX(stepperSpeed);
+      speedClawY(0);
     }
-  } else if (digitalRead(joyPinRight) == HIGH && digitalRead(joyPinLeft) == LOW){
-    if (destinationX > maxX){
-      moveClawX(-stepperSpeed);
+  } else if (digitalRead(joyPinRight) == LOW && digitalRead(joyPinLeft) == HIGH){
+    if (maxX >= destinationX){
+      speedClawX(stepperSpeed);
+      speedClawY(0);
+    }else {
+      speedClawX(-stepperSpeed);
+      speedClawY(0);
     }
+  } else {
+    speedClawX(0);
+    speedClawY(0);
   }
 }
 
@@ -181,23 +184,14 @@ void startGame(){
 }
 
 // moving the y steppers in parallel if destination is allowed
-void moveClawY(signed int value){
-  if (0 <= destinationY  && destinationY <= maxY){
-    stepperYOne.setSpeed(value);
-    stepperYTwo.setSpeed(value);
-  } else {
-    stepperYOne.setSpeed(0);
-    stepperYTwo.setSpeed(0);
-  }
+void speedClawY(signed int value){
+  stepperYOne.setSpeed(value);
+  stepperYTwo.setSpeed(value);
 }
 
 // same for the x stepper
-void moveClawX(signed int value){
-  if (0 >= destinationX  && destinationX >= maxX){
-    stepperX.setSpeed(value);
-  } else {
-    stepperX.setSpeed(0);
-  }
+void speedClawX(signed int value){
+  stepperX.setSpeed(value);
 }
 
 //moving to the idle destination and opening the claw to drop the item
@@ -217,7 +211,7 @@ bool clawAndRopeFinished(){
 
 //unsure!
 bool clawFinished(){
-  return ((servoPos == 0) || (servoPos == 45));
+  return ((servoPos == -10) || (servoPos == 50));
 }
 
 bool ropeFinished(){
@@ -239,40 +233,29 @@ void grabItemInit(){
 
 //dropping the claw
 void dropClaw(){
-  stepperSeil.moveTo(800);
+  stepperSeil.moveTo(0);
   changeState(DROPPING);
 }
 
 //lifting the claw
 void liftClaw(){
-  stepperSeil.moveTo(0);
+  stepperSeil.moveTo(-1200);
   changeState(LIFTING);
 }
 
 //opening the claw
 void openClaw(){
-  for (servoPos; servoPos >= 0; servoPos -= 1){
+  for (servoPos; servoPos >= -10; servoPos -= 1){
     servoClaw.write(servoPos);
-    delay(44);
+    delay(20);
   }
 }
 
 //closing the claw
 void closeClaw(){
-  for (servoPos ; servoPos <= 45; servoPos += 1){
+  for (servoPos ; servoPos <= 50; servoPos += 1){
     servoClaw.write(servoPos);
-    delay(44);
-  }
-}
-
-//checking for emergency
-void checkForEmergency(){
-  if ((digitalRead(limitSwitchX) == HIGH || digitalRead(limitSwitchY) == HIGH) && state == RUNNING ){
-    Serial.println("Limit switch triggered!");
-    stopExecution();
-  } else if (destinationX < maxX || destinationY > maxY){
-    Serial.println("Out of bounds movement!");
-    stopExecution();
+    delay(20);
   }
 }
 
