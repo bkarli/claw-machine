@@ -17,7 +17,7 @@ mod timer;
 use panic_halt as _;
 
 use crate::timer::{GenericTicker, PrecisionTicker};
-use arduino_hal::hal::port::Dynamic;
+use arduino_hal::hal::port::{Dynamic, PA4, PA5};
 use arduino_hal::port::mode::{Input, Output, PullUp};
 use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::{IntoPwmPin};
@@ -103,9 +103,9 @@ fn main() -> ! {
     // create a serial connection with the console output
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
 
-    let x_stepper_pulse = pins.d27.into_output().downgrade();
+    let x_stepper_pulse = pins.d27.into_output();
 
-    let x_stepper_direction = pins.d26.into_output().downgrade();
+    let x_stepper_direction = pins.d26.into_output();
 
 
     // even tough interrupts are not enabled yet still have to create critical section for mutex
@@ -138,17 +138,17 @@ fn main() -> ! {
 }
 
 async fn test_async_stepper(
-    direction_pin : Pin<Output, Dynamic>,
-    pulse_pin: Pin<Output, Dynamic>
+    direction_pin : Pin<Output, PA4>,
+    pulse_pin: Pin<Output, PA5>
 ) {
     let mut motor = Stepper::new(direction_pin, pulse_pin, false);
 
     for _ in 0..200 {
-        motor.move_direction(ClockWise, 2000).await
+        motor.move_direction(ClockWise, 1000).await
     }
 
     for _ in 0..200 {
-        motor.move_direction(CounterClockWise, 2000).await
+        motor.move_direction(CounterClockWise, 1000).await
     }
 
 }
