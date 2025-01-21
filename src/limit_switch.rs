@@ -62,7 +62,7 @@ impl LimitSwitch {
                 interrupt::free(|cs| {
                     LIMIT_SWITCH_TASKS[self.switch_index]
                         .borrow(cs)
-                        .replace(cx.waker().task())
+                        .replace(cx.waker().task_id())
                 });
                 Poll::Pending
             }
@@ -80,28 +80,8 @@ fn PCINT2() {
     // We don't actually need to create a critical section as AVR suppresses other interrupts during
     // an Interrupt
     interrupt::free(|cs| {
-        let limit_x_pin = X_LIMIT.borrow(cs).take().unwrap();
-        let limit_y_pin = Y_LIMIT.borrow(cs).take().unwrap();
-        let limit_z_pin = Z_LIMIT.borrow(cs).take().unwrap();
 
-        let switches = [
-            limit_x_pin.downgrade(),
-            limit_y_pin.downgrade(),
-            limit_z_pin.downgrade(),
-        ];
         let switch_states = LIMIT_SWITCH_STATES.borrow(cs).borrow_mut();
 
-        for (index, switch_state) in switch_states.iter().enumerate() {
-            if switches.get(index).unwrap().is_high() != *switch_state {
-                let limit_switch_task = LIMIT_SWITCH_TASKS
-                    .get(index)
-                    .unwrap()
-                    .borrow(cs)
-                    .replace(0xFFFF);
-                if limit_switch_task != 0xFFFF {
-                    wake_task(limit_switch_task)
-                }
-            }
-        }
     });
 }

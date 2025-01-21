@@ -10,11 +10,11 @@ static TASK_Q: heapless::mpmc::Q16<usize> = heapless::mpmc::Q16::new();
 static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
 
 pub trait ExtWaker {
-    fn task(&self) -> usize;
+    fn task_id(&self) -> usize;
 }
 
 impl ExtWaker for Waker {
-    fn task(&self) -> usize {
+    fn task_id(&self) -> usize {
         for task_id in 0..NUM_TASKS.load(Ordering::Relaxed) {
             if get_waker(task_id as usize).will_wake(self) {
                 return task_id as usize;

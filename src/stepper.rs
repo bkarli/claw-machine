@@ -5,14 +5,17 @@
 use crate::channel::Receiver;
 use crate::stepper::StepperDirection::{ClockWise, CounterClockWise, Idle};
 use crate::timer::delay_us;
-use arduino_hal::hal::port::Dynamic;
+use arduino_hal::hal::port::{Dynamic, PA0, PA1, PA2, PA3, PA4, PA5};
 use arduino_hal::port::mode::Output;
 use arduino_hal::port::Pin;
 use core::future::join;
+use futures::FutureExt;
+
 use embedded_hal::digital::OutputPin;
 use futures::select_biased;
 
-const MAX_STEPS: u32 = 6000;
+const MAX_X_STEPS: i32 = 1000;
+const MAX_Y_STEPS: i32 = 1000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum StepperDirection {
@@ -20,103 +23,109 @@ pub enum StepperDirection {
     ClockWise,
     CounterClockWise,
 }
-pub struct Stepper {
-    direction_pin: Pin<Output, Dynamic>,
-    pulse_pin: Pin<Output, Dynamic>,
-    inverted: bool,
-    max: u32,
-}
 
-impl Stepper {
-    pub fn new(
-        direction_pin: Pin<Output, Dynamic>,
-        pulse_pin: Pin<Output, Dynamic>,
-        inverted: bool,
-    ) -> Self {
-        let max: u32 = if inverted { MAX_STEPS } else { 0u32 };
-        Self {
-            direction_pin,
-            pulse_pin,
-            inverted,
-            max,
-        }
-    }
 
-    /**
-    Steps the motor in one direction with a pulse width or variable timeout
-    */
-    pub async fn move_direction(&mut self, direction: StepperDirection, pulse_width: u16) {
-        match direction {
-            ClockWise => {
-                if self.max > MAX_STEPS {
-                    return;
-                }
-                self.pulse_pin.set_high();
-                delay_us(pulse_width).await;
-                self.pulse_pin.set_low();
-                self.max += 1
-            }
-            CounterClockWise => {
-                if self.max <= 0 {
-                    return;
-                }
-                self.direction_pin.set_high();
-                self.pulse_pin.set_high();
-                delay_us(pulse_width).await;
-                self.pulse_pin.set_low();
-                self.direction_pin.set_low();
-                self.max -= 1
-            }
-            _ => {}
-        }
-    }
-}
-
-pub async fn stepper_task_x(
-    stepper_pin: Pin<Output>,
-    direction_pin: Pin<Output>,
-    mut receiver: Receiver<'_, StepperDirection>,
+pub async fn x_gantry (
+    mut receiver: Receiver<'_,StepperDirection>,
+    x_stepper_direction: &mut Pin<Output, PA1>,
+    x_stepper_pulse: &mut Pin<Output, PA0>
 ) {
-    let mut motor = Stepper::new(stepper_pin, direction_pin, false);
+    let mut steps = 0;
+    let mut stepper_direction = Idle;
     loop {
-        let direction = receiver.receive().await;
-    }
-}
-
-pub async fn stepper_task_y(
-    stepper_pin_1: Pin<Output, Dynamic>,
-    direction_pin_1: Pin<Output, Dynamic>,
-
-    stepper_pin_2: Pin<Output, Dynamic>,
-    direction_pin_2: Pin<Output, Dynamic>,
-    mut axis_receiver: Receiver<'_, StepperDirection>,
-) {
-    let mut motor_1 = Stepper::new(stepper_pin_1, direction_pin_1, false);
-    let mut motor_2 = Stepper::new(stepper_pin_2, direction_pin_2, true);
-
-    // should be idle at start
-    let mut direction: StepperDirection = Idle;
-    let mut inverted_direction = Idle;
-
-    loop {
-        match direction {
+        match stepper_direction {
             Idle => {
-                // current state is idle wait for a new direction
-                direction = axis_receiver.receive().await;
-                // once new direction has been received invert it
-                inverted_direction = match direction {
-                    ClockWise => CounterClockWise,
-                    CounterClockWise => ClockWise,
-                    Idle => Idle,
-                };
+                stepper_direction = receiver.receive().await;
+            },
+            ClockWise => {
+                select_biased! {
+                    stepper_direction = receiver.receive().fuse() => {},
+                    _ = async {
+                        if steps > MAX_X_STEPS {
+                            return;
+                        }
+                        x_stepper_pulse.set_high();
+                        delay_us(1000).await;
+                        x_stepper_pulse.set_low();
+                        delay_us(1000).await;
+                        steps += 1;
+                    }.fuse() => {}
+                }
+            },
+            CounterClockWise => {
+                select_biased! {
+                    stepper_direction = receiver.receive().fuse() => {},
+                    _ = async {
+                        if steps <= 0 {
+                            return;
+                        }
+                        x_stepper_direction.set_high();
+                        x_stepper_pulse.set_high();
+                        delay_us(1000).await;
+                        x_stepper_pulse.set_low();
+                        delay_us(1000).await;
+                        x_stepper_direction.set_low();
+                        steps -= 1;
+                    }.fuse() => {}
+                }
             }
-            _ => {
-                // await both futures at the same time
-                join!(
-                    motor_1.move_direction(direction, 1000),
-                    motor_2.move_direction(inverted_direction, 1000)
-                )
-                .await;
+        }
+    }
+}
+
+pub async fn y_gantry (
+    mut receiver: Receiver<'_,StepperDirection>,
+    y_stepper_direction: &mut Pin<Output, PA3>,
+    y_stepper_pulse: &mut Pin<Output, PA2>,
+    y_stepper_direction_inverted: &mut Pin<Output, PA5>,
+    y_stepper_pulse_inverted: &mut Pin<Output, PA4>
+) {
+    let mut steps = 0;
+    loop {
+        let mut stepper_direction = Idle;
+        loop {
+            match stepper_direction {
+                Idle => {
+                    stepper_direction = receiver.receive().await;
+                },
+                ClockWise => {
+                    select_biased! {
+                    stepper_direction = receiver.receive().fuse() => {},
+                    _ = async {
+                        if steps > MAX_X_STEPS {
+                            return;
+                        }
+                        y_stepper_direction_inverted.set_high();
+                        y_stepper_pulse.set_high();
+                        y_stepper_pulse_inverted.set_high();
+                        delay_us(1000).await;
+                        y_stepper_pulse.set_low();
+                        y_stepper_pulse_inverted.set_low();
+                        delay_us(1000).await;
+                        y_stepper_direction_inverted.set_low();
+                        steps += 1;
+                    }.fuse() => {}
+                }
+                },
+                CounterClockWise => {
+                    select_biased! {
+                    stepper_direction = receiver.receive().fuse() => {},
+                    _ = async {
+                        if steps <= 0 {
+                            return;
+                        }
+                        y_stepper_direction.set_high();
+                        y_stepper_pulse.set_high();
+                        y_stepper_pulse_inverted.set_high();
+                        delay_us(1000).await;
+                        y_stepper_pulse.set_low();
+                        y_stepper_pulse_inverted.set_low();
+                        delay_us(1000).await;
+                        y_stepper_direction.set_low();
+                        steps -= 1;
+                    }.fuse() => {}
+                }
+                }
             }
         }
     }

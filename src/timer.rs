@@ -19,7 +19,6 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use heapless::binary_heap::{BinaryHeap, Min};
-
 use crate::executor::{wake_task, ExtWaker};
 
 // Type alias for avr_device::interrupt::Mutex to Mutex
@@ -89,6 +88,16 @@ impl GenericTicker {
     pub fn now() -> u64 {
         interrupt::free(|cs| G_TICK_COUNTER.borrow(cs).get())
     }
+
+    pub fn seconds() -> u64 {
+        let ticks = Self::now();
+        Self::millis_from_ticks(ticks)
+    }
+
+    fn millis_from_ticks(ticks: u64) -> u64 {
+        ticks / 62500
+    }
+
 }
 
 pub(crate) struct GenericTimer {
@@ -136,7 +145,7 @@ impl Future for GenericTimer {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state {
             TimerState::Init => {
-                self.register(cx.waker().task());
+                self.register(cx.waker().task_id());
                 self.state = TimerState::Waiting;
                 Poll::Pending
             }
@@ -171,7 +180,6 @@ fn schedule_generic_wakeup(
     // if first end tick - current tick <= 65535 add set ticker delta and modify increment
     while let Some((end_ticks, task)) = queue.peek() {
         let remainder: u64 = *end_ticks - counter;
-
         if remainder <= 65535 {
             // if ticks are near 0 another interrupt is not necessary => Wake up task immediately
             if remainder <= 10 {
@@ -179,6 +187,7 @@ fn schedule_generic_wakeup(
 
                 // remove timer from queue
                 queue.pop();
+                continue;
             } else {
                 // create a timed interrupt for the remaining time
                 tc1.as_mut()
@@ -192,6 +201,7 @@ fn schedule_generic_wakeup(
                 break;
             }
         }
+        break;
     }
 }
 
@@ -205,6 +215,7 @@ fn TIMER1_COMPA() {
         let counter_c = G_TICK_COUNTER.borrow(cs);
         let increment_c = G_TICK_INCREMENT.borrow(cs);
         let counter = counter_c.get() + G_TICK_INCREMENT.borrow(cs).get();
+
         counter_c.set(counter);
         schedule_generic_wakeup(
             G_QUEUE.borrow(cs).borrow_mut(),
@@ -222,7 +233,7 @@ Constant conversion that convert microseconds to precision ticks
 
 Min is 1 Tick which is 2.5 microseconds
 */
-const fn us_to_p_ticks(us: u16) -> u16 {
+pub(crate) const fn us_to_p_ticks(us: u32) -> u32 {
     250 * us / 1000
 }
 
@@ -238,6 +249,9 @@ static P_QUEUE: Mutex<RefCell<BinaryHeap<(u64, usize), Min, 8>>> =
 
 /// Keep track of current precision tick count
 static P_TICK_COUNTER: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
+
+/// A variable tick incrementer
+static P_TICK_INCREMENT: Mutex<Cell<u64>> = Mutex::new(Cell::new(250));
 
 /**
 Ticker to generate Ticker with microsecond precision used internally to generate Timer Events with
@@ -256,48 +270,134 @@ pub struct PrecisionTicker {
 }
 
 impl PrecisionTicker {
-    pub fn init(tc0: TC0) {
-        // enable CTC (clear timer on compare match)
-        tc0.tccr0a.write(|w| w.wgm0().ctc());
-        // choose the prescaler of the counter register
-        tc0.tccr0b.write(|w| w.cs0().prescale_64());
+    fn now() -> u64 {
+        interrupt::free(|cs| P_TICK_COUNTER.borrow(cs).get())
+    }
 
+    pub fn millis() -> u64 {
+        let ticks = Self::now();
+        Self::from_ticks_to_millis(ticks)
+    }
+
+    fn from_ticks_to_millis(ticks: u64) -> u64 {
+        ticks / 250
+    }
+}
+
+impl PrecisionTicker {
+    pub fn init(tc0: TC0) {
+        tc0.tccr0a.write(|w| w.wgm0().ctc());
+        tc0.ocr0a.write(|w| w.bits(250u8));
+        tc0.tccr0b.write(|w| w.cs0().prescale_64());
+        tc0.timsk0.write(|w| w.ocie0a().set_bit());
         // replace tc0
         interrupt::free(|cs| {
+            P_TICK_COUNTER.borrow(cs).set(0);
             P_TICKER.tc0.borrow(cs).replace(Some(tc0));
         })
     }
 }
 
 pub struct PrecisionTimer {
-    end_ticks: u16,
+    end_ticks: u64,
+    state: TimerState,
 }
 
 impl PrecisionTimer {
-    pub fn new(microseconds: u16) -> Self {
+    pub fn new(microseconds: u32) -> Self {
+        let end_ticks = us_to_p_ticks(microseconds) as u64 + PrecisionTicker::now();
         Self {
-            end_ticks: us_to_p_ticks(microseconds),
+            end_ticks,
+            state: TimerState::Init,
         }
     }
 
     fn register(&self, task: usize) {
-        interrupt::free(|cs| {})
+        interrupt::free(|cs| {
+            let mut queue = P_QUEUE.borrow(cs).borrow_mut();
+            let is_first = if let Some((next_timer, _)) = queue.peek() {
+                self.end_ticks < *next_timer
+            } else {
+                true
+            };
+            if queue.push((self.end_ticks, task)).is_err() {
+                panic!("Queue full")
+            }
+            // if it is the first element queue for wakeup
+            if is_first {
+                let ticks = P_TICK_COUNTER.borrow(cs).get();
+                let increment_c = P_TICK_INCREMENT.borrow(cs);
+                schedule_precision_wakeup(
+                    queue,
+                    P_TICKER.tc0.borrow(cs).borrow_mut(),
+                    ticks,
+                    increment_c,
+                )
+            }
+        })
     }
 }
 
 impl Future for PrecisionTimer {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        todo!()
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.state {
+            TimerState::Init => {
+                self.register(cx.waker().task_id());
+                self.state = TimerState::Waiting;
+                Poll::Pending
+            }
+            TimerState::Waiting => {
+                if PrecisionTicker::now() >= self.end_ticks {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
     }
 }
-fn schedule_precision_wakeup() {}
+fn schedule_precision_wakeup(
+    mut queue: RefMut<BinaryHeap<(u64, usize), Min, 8>>,
+    mut tc0: RefMut<Option<TC0>>,
+    counter: u64,
+    increment_c: &Cell<u64>)
+{
+    // take first of queue
+    // if first end tick - current tick <= 250 add set ticker delta and modify increment
+    while let Some((end_ticks, task)) = queue.peek() {
+        let remainder: u64 = *end_ticks - counter;
+        if remainder <= 250 {
+            // if ticks are near 0 another interrupt is not necessary => Wake up task immediately
+            if remainder <= 5 {
+
+                wake_task(*task);
+
+                // remove timer from queue
+                queue.pop();
+            } else {
+                // create a timed interrupt for the remaining time
+                tc0.as_mut()
+                    .unwrap()
+                    .ocr0a
+                    .write(|w| w.bits(remainder as u8));
+
+                // update the increment amount
+                increment_c.set(remainder);
+                // new timer has been scheduled break the while loop
+                break;
+            }
+        }
+        break;
+    }
+
+}
 
 /**
 Public function that delays something for n us
 */
-pub async fn delay_us(us: u16) {
+pub async fn delay_us(us: u32) {
     PrecisionTimer::new(us).await
 }
 
@@ -307,5 +407,16 @@ Interrupt triggered at least every millisecond
 #[avr_device::interrupt(atmega2560)]
 #[allow(non_snake_case)]
 fn TIMER0_COMPA() {
-    interrupt::free(|cs| {})
+    interrupt::free(|cs| {
+        let counter_c = P_TICK_COUNTER.borrow(cs);
+        let increment_c = P_TICK_INCREMENT.borrow(cs);
+        let counter = counter_c.get() + P_TICK_INCREMENT.borrow(cs).get();
+        counter_c.set(counter);
+        schedule_precision_wakeup(
+            P_QUEUE.borrow(cs).borrow_mut(),
+            P_TICKER.tc0.borrow(cs).borrow_mut(),
+            counter,
+            increment_c,
+        )
+    })
 }

@@ -19,7 +19,7 @@ mod timer;
 #[allow(unused_imports)]
 use panic_halt as _;
 
-use crate::game::Game;
+use crate::game::{GameState};
 use crate::timer::{GenericTicker, PrecisionTicker};
 use arduino_hal::hal::port::Dynamic;
 use arduino_hal::port::mode::{Input, PullUp};
@@ -27,7 +27,12 @@ use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::Prescaler::Prescale64;
 use arduino_hal::simple_pwm::{IntoPwmPin, Timer3Pwm};
 use avr_device::interrupt;
-use core::cell::{Cell, RefCell};
+use core::cell::{RefCell};
+use core::pin::pin;
+use arduino_hal::delay_ms;
+use crate::channel::Channel;
+use crate::joystick::{joystick_switch_task, JoystickDirection};
+use crate::stepper::{x_gantry, y_gantry, StepperDirection};
 
 type Mutex<T> = interrupt::Mutex<T>;
 type Console = arduino_hal::hal::usart::Usart0<arduino_hal::DefaultClock>;
@@ -74,33 +79,33 @@ OUTPUT:
 
 // Joy stick Pins
 /// Joystick Right input Pin
-static J_RIGHT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_RIGHT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Left input Pin
-static J_LEFT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_LEFT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Forward input Pin
-static J_FORWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_FORWARD: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Backward input Pin
-static J_BACKWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_BACKWARD: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 // Button Pins
 /// UI Button start input Pin
-static B_START: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static B_START: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// UI Button end input Pin
-static B_END: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static B_END: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 // Limit switch Pins
 /// Limit switch X
-static X_LIMIT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static X_LIMIT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Limit switch Y
-static Y_LIMIT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static Y_LIMIT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Limit switch Z
-static Z_LIMIT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static Z_LIMIT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Create a console that can be used safely within an interrupt
 static CONSOLE: Mutex<RefCell<Option<Console>>> = Mutex::new(RefCell::new(None));
@@ -113,28 +118,31 @@ fn main() -> ! {
     let dp = arduino_hal::Peripherals::take().unwrap();
     let pins = arduino_hal::pins!(dp);
 
-    // initialize static Tickers
-    PrecisionTicker::init(dp.TC0);
-    GenericTicker::init(dp.TC1);
 
     // create a serial connection with the console output
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
 
-    let x_stepper_pulse = pins.d22.into_output().downgrade();
+    let mut x_stepper_pulse = pins.d22.into_output();
 
-    let x_stepper_direction = pins.d23.into_output().downgrade();
+    let mut x_stepper_direction = pins.d23.into_output();
 
-    let y_stepper_pulse = pins.d24.into_output().downgrade();
+    let mut y_stepper_pulse = pins.d24.into_output();
 
-    let y_stepper_direction = pins.d25.into_output().downgrade();
+    let mut y_stepper_direction = pins.d25.into_output();
 
-    let y_stepper_pulse_inverted = pins.d26.into_output().downgrade();
+    let mut y_stepper_pulse_inverted = pins.d26.into_output();
 
-    let y_stepper_direction_inverted = pins.d27.into_output().downgrade();
+    let mut y_stepper_direction_inverted = pins.d27.into_output();
 
-    let z_stepper_pulse = pins.d28.into_output().downgrade();
+    let mut z_stepper_pulse = pins.d28.into_output();
 
-    let z_stepper_direction = pins.d29.into_output().downgrade();
+    let mut  z_stepper_direction = pins.d29.into_output();
+
+    let mut start_led = pins.d30.into_output();
+
+    let mut end_led = pins.d31.into_output();
+
+    let limit_y = pins.a9.into_pull_up_input();
 
     let timer3 = Timer3Pwm::new(dp.TC3, Prescale64);
 
@@ -148,49 +156,52 @@ fn main() -> ! {
         *CONSOLE.borrow(cs).borrow_mut() = Some(serial);
 
         // set input pins
-        J_RIGHT
-            .borrow(cs)
-            .set(Some(pins.d50.into_pull_up_input().downgrade()));
-        J_LEFT
-            .borrow(cs)
-            .set(Some(pins.d51.into_pull_up_input().downgrade()));
-        J_FORWARD
-            .borrow(cs)
-            .set(Some(pins.d52.into_pull_up_input().downgrade()));
-        J_BACKWARD
-            .borrow(cs)
-            .set(Some(pins.d53.into_pull_up_input().downgrade()));
+        *J_RIGHT.borrow(cs).borrow_mut() = Some(pins.d50.into_pull_up_input().downgrade());
+        *J_LEFT.borrow(cs).borrow_mut() = Some(pins.d51.into_pull_up_input().downgrade());
+        *J_FORWARD.borrow(cs).borrow_mut() = Some(pins.d52.into_pull_up_input().downgrade());
+        *J_BACKWARD.borrow(cs).borrow_mut() = Some(pins.d53.into_pull_up_input().downgrade());
 
-        B_START
-            .borrow(cs)
-            .set(Some(pins.d15.into_pull_up_input().downgrade()));
-        B_END
-            .borrow(cs)
-            .set(Some(pins.d14.into_pull_up_input().downgrade()));
-
-        X_LIMIT
-            .borrow(cs)
-            .set(Some(pins.a8.into_pull_up_input().downgrade()));
-        Y_LIMIT
-            .borrow(cs)
-            .set(Some(pins.a9.into_pull_up_input().downgrade()));
     });
-
+    // initialize static Tickers
+    PrecisionTicker::init(dp.TC0);
+    GenericTicker::init(dp.TC1);
     // enable interrupts for the device
     unsafe { interrupt::enable() };
 
-    let exint = dp.EXINT;
 
-    let mut game = Game::new(exint);
-    game.run(
-        x_stepper_pulse,
-        x_stepper_direction,
-        y_stepper_pulse,
-        y_stepper_direction,
-        y_stepper_pulse_inverted,
-        y_stepper_direction_inverted,
-        z_stepper_pulse,
-        z_stepper_direction,
-        claw_pwm,
-    );
+
+    // game loop
+    loop {
+        if limit_y.is_low() {
+            interrupt::free(|cs| {
+                if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
+                    let _ = ufmt::uwriteln!(console, "grr");
+                }
+            });
+        }
+        delay_ms(100);
+    }
+}
+
+async fn reset_game(
+
+) {
+
+}
+
+async fn wait_for_start(
+
+) {
+
+}
+async fn wait_for_end(
+
+) {
+
+}
+
+async fn blink_led(
+
+) {
+
 }
