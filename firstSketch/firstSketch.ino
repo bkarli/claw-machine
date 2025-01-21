@@ -24,13 +24,6 @@ Servo servoClaw;
 AccelStepper* steppersXY[] = {&stepperYOne, &stepperYTwo, &stepperX};
 AccelStepper* allSteppers[] = {&stepperYOne, &stepperYTwo, &stepperX, &stepperSeil};
 
-/*
-//more pins
-const int limitSwitchX = A8;
-const int limitSwitchY = A9;
-const int limitSwitchSeil = A10;
-*/
-
 const int stepperSpeed = 600;
 int state;
 
@@ -59,7 +52,6 @@ void loop() {
   int startButton = digitalRead(buttonPinStart);
   destinationY = stepperYOne.currentPosition();
   destinationX = stepperX.currentPosition();
-  //checkForEmergency();
   for (AccelStepper* runningStepper : steppersXY){
     runningStepper -> runSpeed();
   }
@@ -77,34 +69,28 @@ void loop() {
       break;
 
     case RUNNING: //RUNNING
-      //check if the steppers are still and end button is pressed
       if (endButton == LOW){
         setStepperSpeeds(0);
         endGame();
-      // read the joystick input and move the claw motors
       } else {
         readJoystick();
       }
       break;
 
     case DROPPING: //DROPPING
-      //let the rope stepper go to its destination
       stepperSeil.run();
       if (ropeFinished()){
         Serial.println("rope finished");
-        //this takes a fixed amount of time and delays all other things
         closeClaw();
         liftClaw();
       }
       break;
 
     case LIFTING: //LIFTING
-      //let the rope stepper finish moving
       stepperSeil.run();
       if (ropeFinished()){
           moveClawToIdle();
         }
-        //return the claw to its original position
       break;
 
     case RETURNING: //RETURNING
