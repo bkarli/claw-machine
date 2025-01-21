@@ -4,6 +4,8 @@
 #include "firstSketch.h"
 
 //setting pins
+const int lampRed = 9;
+const int lampGreen = 10;
 const int joyPinLeft = 51;
 const int joyPinRight = 53;
 const int joyPinForward = 50;
@@ -63,10 +65,13 @@ void loop() {
   }
   switch (state){
     case IDLE: //IDLE
+      digitalWrite(lampGreen, HIGH);
       stepperSeil.run();
       //if they are finished moving and start button is pressed switch state
       if (startButton == LOW && ropeFinished()){
         Serial.println("game start");
+        digitalWrite(lampGreen, LOW);
+        digitalWrite(lampRed, HIGH);
         startGame();
       }
       break;
@@ -116,6 +121,8 @@ void loop() {
         two = true;
       }
       if (one && two ){
+        digitalWrite(lampRed, LOW);
+        digitalWrite(lampGreen, HIGH);
         openClaw();
         changeState(IDLE);
       }
@@ -125,6 +132,8 @@ void loop() {
 
 // setting the pins to in- / output
 void setPins(){
+  pinMode(lampRed, OUTPUT);
+  pinMode(lampGreen, OUTPUT);
   pinMode(joyPinLeft, INPUT_PULLUP);
   pinMode(joyPinRight, INPUT_PULLUP);
   pinMode(joyPinForward, INPUT_PULLUP);
