@@ -16,9 +16,9 @@ use core::task::Poll;
 /// 1: Y-Limit
 /// 2: Z-Limit
 static LIMIT_SWITCH_TASKS: [Mutex<RefCell<usize>>; 3] = [
-    Mutex::new(RefCell::new(0xFFFF)),
-    Mutex::new(RefCell::new(0xFFFF)),
-    Mutex::new(RefCell::new(0xFFFF)),
+    Mutex::new(Cell::new(0xFFFF)),
+    Mutex::new(Cell::new(0xFFFF)),
+    Mutex::new(Cell::new(0xFFFF)),
 ];
 
 /// a static array that holds the previous state of the limit switches
@@ -37,6 +37,7 @@ struct for the limit switches
 */
 struct LimitSwitch {
     switch_index: usize,
+
 }
 
 impl LimitSwitch {

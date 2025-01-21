@@ -91,39 +91,41 @@ fn PCINT0() {
     interrupt::free(|cs| {
         let states = JOYSTICK_SWITCH_STATES.borrow(cs);
         if let Some(right_pin) = J_RIGHT.borrow(cs).borrow_mut().as_ref() {
-            let state = states.borrow().as_ref()[0];
+            let state = states.borrow().as_ref()[3];
             if right_pin.is_high() == state {
-                let task_id = JOYSTICK_SWITCH_TASKS[0].borrow(cs).replace(0xFFFF);
+                let task_id = JOYSTICK_SWITCH_TASKS[3].borrow(cs).replace(0xFFFF);
                 if task_id != 0xFFFF {
+                    states.borrow_mut().as_mut()[3] != state;
                     wake_task(task_id)
                 }
             }
         };
         if let Some(left_pin) = J_LEFT.borrow(cs).borrow_mut().as_ref(){
-            let state = states.borrow().as_ref()[1];
+            let state = states.borrow().as_ref()[2];
             if left_pin.is_high() == state {
-                let task_id = JOYSTICK_SWITCH_TASKS[1].borrow(cs).replace(0xFFFF);
+                let task_id = JOYSTICK_SWITCH_TASKS[2].borrow(cs).replace(0xFFFF);
                 if task_id != 0xFFFF {
-                    states.borrow_mut().as_mut()[3] != state;
+                    states.borrow_mut().as_mut()[2] != state;
                     wake_task(task_id)
                 }
             }
         };
         if let Some(forward_pin) = J_FORWARD.borrow(cs).borrow_mut().as_ref(){
-            let state = states.borrow().as_ref()[2];
+            let state = states.borrow().as_ref()[0];
             if forward_pin.is_high() == state {
-                let task_id = JOYSTICK_SWITCH_TASKS[2].borrow(cs).replace(0xFFFF);
+                let task_id = JOYSTICK_SWITCH_TASKS[0].borrow(cs).replace(0xFFFF);
                 if task_id != 0xFFFF {
+                    states.borrow_mut().as_mut()[0] != state;
                     wake_task(task_id)
                 }
             }
         };
         if let Some(backward_pin) = J_BACKWARD.borrow(cs).borrow_mut().as_ref(){
-            let state = states.borrow().as_ref()[3];
+            let state = states.borrow().as_ref()[1];
             if backward_pin.is_high() == state {
-                let task_id = JOYSTICK_SWITCH_TASKS[3].borrow(cs).replace(0xFFFF);
+                let task_id = JOYSTICK_SWITCH_TASKS[1].borrow(cs).replace(0xFFFF);
                 if task_id != 0xFFFF {
-                    states.borrow_mut().as_mut()[3] != state;
+                    states.borrow_mut().as_mut()[1] != state;
                     wake_task(task_id)
                 }
             }
