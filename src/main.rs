@@ -19,7 +19,7 @@ mod timer;
 #[allow(unused_imports)]
 use panic_halt as _;
 
-use crate::game::Game;
+use crate::game::{Game, GameState};
 use crate::timer::{GenericTicker, PrecisionTicker};
 use arduino_hal::hal::port::Dynamic;
 use arduino_hal::port::mode::{Input, PullUp};
@@ -28,6 +28,10 @@ use arduino_hal::simple_pwm::Prescaler::Prescale64;
 use arduino_hal::simple_pwm::{IntoPwmPin, Timer3Pwm};
 use avr_device::interrupt;
 use core::cell::{Cell, RefCell};
+use core::pin::pin;
+use crate::channel::Channel;
+use crate::joystick::{joystick_switch_task, JoystickDirection};
+use crate::stepper::{x_gantry, y_gantry, StepperDirection};
 
 type Mutex<T> = interrupt::Mutex<T>;
 type Console = arduino_hal::hal::usart::Usart0<arduino_hal::DefaultClock>;
@@ -74,16 +78,16 @@ OUTPUT:
 
 // Joy stick Pins
 /// Joystick Right input Pin
-static J_RIGHT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_RIGHT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Left input Pin
-static J_LEFT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_LEFT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Forward input Pin
-static J_FORWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_FORWARD: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Backward input Pin
-static J_BACKWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_BACKWARD: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 // Button Pins
 /// UI Button start input Pin
@@ -113,28 +117,29 @@ fn main() -> ! {
     let dp = arduino_hal::Peripherals::take().unwrap();
     let pins = arduino_hal::pins!(dp);
 
-    // initialize static Tickers
-    PrecisionTicker::init(dp.TC0);
-    GenericTicker::init(dp.TC1);
 
     // create a serial connection with the console output
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
 
-    let x_stepper_pulse = pins.d22.into_output().downgrade();
+    let mut x_stepper_pulse = pins.d22.into_output();
 
-    let x_stepper_direction = pins.d23.into_output().downgrade();
+    let mut x_stepper_direction = pins.d23.into_output();
 
-    let y_stepper_pulse = pins.d24.into_output().downgrade();
+    let mut y_stepper_pulse = pins.d24.into_output();
 
-    let y_stepper_direction = pins.d25.into_output().downgrade();
+    let mut y_stepper_direction = pins.d25.into_output();
 
-    let y_stepper_pulse_inverted = pins.d26.into_output().downgrade();
+    let mut y_stepper_pulse_inverted = pins.d26.into_output();
 
-    let y_stepper_direction_inverted = pins.d27.into_output().downgrade();
+    let mut y_stepper_direction_inverted = pins.d27.into_output();
 
-    let z_stepper_pulse = pins.d28.into_output().downgrade();
+    let mut z_stepper_pulse = pins.d28.into_output();
 
-    let z_stepper_direction = pins.d29.into_output().downgrade();
+    let mut  z_stepper_direction = pins.d29.into_output();
+
+    let mut start_led = pins.d30.into_output();
+
+    let mut end_led = pins.d31.into_output();
 
     let timer3 = Timer3Pwm::new(dp.TC3, Prescale64);
 
@@ -148,49 +153,118 @@ fn main() -> ! {
         *CONSOLE.borrow(cs).borrow_mut() = Some(serial);
 
         // set input pins
-        J_RIGHT
-            .borrow(cs)
-            .set(Some(pins.d50.into_pull_up_input().downgrade()));
-        J_LEFT
-            .borrow(cs)
-            .set(Some(pins.d51.into_pull_up_input().downgrade()));
-        J_FORWARD
-            .borrow(cs)
-            .set(Some(pins.d52.into_pull_up_input().downgrade()));
-        J_BACKWARD
-            .borrow(cs)
-            .set(Some(pins.d53.into_pull_up_input().downgrade()));
+        *J_RIGHT.borrow(cs).borrow_mut() = Some(pins.d50.into_pull_up_input().downgrade());
+        *J_LEFT.borrow(cs).borrow_mut() = Some(pins.d51.into_pull_up_input().downgrade());
+        *J_FORWARD.borrow(cs).borrow_mut() = Some(pins.d52.into_pull_up_input().downgrade());
+        *J_BACKWARD.borrow(cs).borrow_mut() = Some(pins.d53.into_pull_up_input().downgrade());
 
-        B_START
-            .borrow(cs)
-            .set(Some(pins.d15.into_pull_up_input().downgrade()));
-        B_END
-            .borrow(cs)
-            .set(Some(pins.d14.into_pull_up_input().downgrade()));
-
-        X_LIMIT
-            .borrow(cs)
-            .set(Some(pins.a8.into_pull_up_input().downgrade()));
-        Y_LIMIT
-            .borrow(cs)
-            .set(Some(pins.a9.into_pull_up_input().downgrade()));
     });
-
+    // initialize static Tickers
+    PrecisionTicker::init(dp.TC0);
+    GenericTicker::init(dp.TC1);
     // enable interrupts for the device
     unsafe { interrupt::enable() };
 
     let exint = dp.EXINT;
 
-    let mut game = Game::new(exint);
-    game.run(
-        x_stepper_pulse,
-        x_stepper_direction,
-        y_stepper_pulse,
-        y_stepper_direction,
-        y_stepper_pulse_inverted,
-        y_stepper_direction_inverted,
-        z_stepper_pulse,
-        z_stepper_direction,
-        claw_pwm,
-    );
+    let mut game_state = GameState::IDLE;
+
+
+    // game loop
+    loop {
+        match game_state {
+            GameState::IDLE => {
+                // enable limit switch interrupts
+                exint.pcicr.write(|w| unsafe { w.bits(0b100) });
+                exint.pcmsk2.write(|w| w.bits(0b00000111));
+
+                let reset_task = pin!(reset_game());
+                let blink_led_task = pin!(blink_led());
+                executor::run_task(&mut [reset_task, blink_led_task]);
+
+                // enable UI button interrupts and disable limit switch interrupts
+                exint.pcicr.write(|w| unsafe { w.bits(0b010) });
+                exint.pcmsk1.write(|w| w.bits(0b00000010));
+
+                // task that waits for user to press green button
+                let wait_for_start_task = pin!(wait_for_start());
+                executor::run_task(&mut [wait_for_start_task]);
+
+
+                game_state = GameState::RUNNING;
+            }
+            GameState::RUNNING => {
+                // enable all interrupts except limit switches
+                exint.pcicr.write(|w| unsafe { w.bits(0b011) });
+                // Joystick pc interrupt pins
+                exint.pcmsk0.write(|w| w.bits(0b00001111));
+                // end button interrupt pin
+                exint.pcmsk1.write(|w| w.bits(0b00000100));
+
+
+                // channels for both x-and y-axis
+                let x_channel: Channel<StepperDirection> = Channel::new();
+                let y_channel: Channel<StepperDirection> = Channel::new();
+
+                let x_gantry_task = pin!(x_gantry(
+                    x_channel.get_receiver(),
+                    &mut x_stepper_direction,
+                    &mut x_stepper_pulse
+                ));
+
+                let y_gantry_task = pin!(y_gantry(
+                    y_channel.get_receiver(),
+                    &mut y_stepper_direction,
+                    &mut y_stepper_pulse,
+                    &mut y_stepper_direction_inverted,
+                    &mut y_stepper_pulse_inverted,
+                ));
+
+                let joystick_right_task = pin!(joystick_switch_task(
+                        JoystickDirection::RIGHT,
+                        x_channel.get_sender()
+                    ));
+                let joystick_left_task = pin!(joystick_switch_task(
+                        JoystickDirection::LEFT,
+                        x_channel.get_sender()
+                    ));
+                let joystick_forward_task = pin!(joystick_switch_task(
+                        JoystickDirection::FORWARD,
+                        y_channel.get_sender()
+                    ));
+                let joystick_backward_task = pin!(joystick_switch_task(
+                        JoystickDirection::BACKWARD,
+                        y_channel.get_sender()
+                    ));
+
+                executor::run_task(&mut [joystick_right_task,joystick_left_task,joystick_forward_task,joystick_backward_task, x_gantry_task, y_gantry_task ])
+
+            },
+            GameState::FINISHED => {
+            }
+        }
+    }
+}
+
+async fn reset_game(
+
+) {
+
+}
+
+async fn wait_for_start(
+
+) {
+
+}
+async fn wait_for_end(
+
+) {
+
+}
+
+async fn blink_led(
+
+) {
+
 }
