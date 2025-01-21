@@ -8,8 +8,8 @@ const int joyPinLeft = 51;
 const int joyPinRight = 53;
 const int joyPinForward = 50;
 const int joyPinBackward = 52;
-const int buttonPinStart = 44;
-const int buttonPinEnd = 42;
+const int buttonPinStart = 15;
+const int buttonPinEnd = 14;
 
 //making steppers
 AccelStepper stepperYOne(AccelStepper::DRIVER, 23, 22);
@@ -33,8 +33,8 @@ const int stepperSpeed = 600;
 int state;
 
 //placeholders
-signed int maxY = 1000;
-signed int maxX = 1000;
+signed int maxY = 1600;
+signed int maxX = 1600;
 int destinationX;
 int destinationY;
 signed int servoPos = 50;
@@ -47,6 +47,9 @@ void setup() {
   openClaw();
   state = States::IDLE;
   Serial.begin(9600);
+  stepperX.setCurrentPosition(0);
+  stepperYOne.setCurrentPosition(0);
+  stepperYTwo.setCurrentPosition(0);
 }
 
 void loop() {
@@ -94,18 +97,28 @@ void loop() {
       //let the rope stepper finish moving
       stepperSeil.run();
       if (ropeFinished()){
-        if (endButton == LOW){
           moveClawToIdle();
-        }else {
-          readJoystick();
         }
         //return the claw to its original position
-      }
       break;
 
     case RETURNING: //RETURNING
-      openClaw();
-      changeState(IDLE);
+      bool one = false;
+      bool two = false;
+      speedClawY(-100);
+      speedClawX(-100);
+      if ( 0 == destinationX){
+        speedClawX(0);
+        one = true;
+      }
+      if ( 0 == destinationY){
+        speedClawY(0);
+        two = true;
+      }
+      if (one && two ){
+        openClaw();
+        changeState(IDLE);
+      }
       break;
   }
 }
@@ -144,7 +157,7 @@ void readJoystick(){
       speedClawX(0);
     }
   } else if (digitalRead(joyPinBackward) == LOW && digitalRead(joyPinForward) == HIGH){
-    if (-maxY <= destinationY){
+    if (0 <= destinationY){
       speedClawY(-stepperSpeed);
       speedClawX(0);
     }else {
@@ -152,19 +165,19 @@ void readJoystick(){
       speedClawX(0);
     }
   } else if (digitalRead(joyPinLeft) == LOW && digitalRead(joyPinRight) == HIGH){
-    if (-maxX <= destinationX){
+    if (destinationX >= maxX){
       speedClawX(-stepperSpeed);
-      speedClawY(0);
-    } else {
-      speedClawX(stepperSpeed);
-      speedClawY(0);
-    }
-  } else if (digitalRead(joyPinRight) == LOW && digitalRead(joyPinLeft) == HIGH){
-    if (maxX >= destinationX){
-      speedClawX(stepperSpeed);
       speedClawY(0);
     }else {
       speedClawX(-stepperSpeed);
+      speedClawY(0);
+    }
+  } else if (digitalRead(joyPinRight) == LOW && digitalRead(joyPinLeft) == HIGH){
+    if (destinationX <= 0){
+      speedClawX(stepperSpeed);
+      speedClawY(0);
+    } else {
+      speedClawX(stepperSpeed);
       speedClawY(0);
     }
   } else {
