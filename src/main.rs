@@ -17,7 +17,7 @@ mod timer;
 use panic_halt as _;
 
 use crate::timer::{GenericTicker, PrecisionTicker};
-use arduino_hal::hal::port::Dynamic;
+use arduino_hal::hal::port::{Dynamic, PA4, PA5};
 use arduino_hal::port::mode::{Input, Output, PullUp};
 use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::{IntoPwmPin};
@@ -104,9 +104,9 @@ fn main() -> ! {
     // create a serial connection with the console output
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
 
-    let x_stepper_pulse = pins.d22.into_output().downgrade();
+    let x_stepper_pulse = pins.d27.into_output();
 
-    let x_stepper_direction = pins.d23.into_output().downgrade();
+    let x_stepper_direction = pins.d26.into_output();
 
 
     // even tough interrupts are not enabled yet still have to create critical section for mutex
@@ -154,8 +154,8 @@ fn main() -> ! {
 
 
 async fn stepper_task_x(
-    stepper_pin: Pin<Output>,
-    direction_pin: Pin<Output>,
+    stepper_pin: Pin<Output, PA5>,
+    direction_pin: Pin<Output, PA4>,
     mut receiver: Receiver<'_, StepperDirection>,
 ) {
     let mut motor = Stepper::new(stepper_pin, direction_pin, false);
