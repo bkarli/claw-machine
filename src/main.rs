@@ -16,18 +16,20 @@ mod timer;
 #[allow(unused_imports)]
 use panic_halt as _;
 
-use crate::timer::{GenericTicker, PrecisionTicker};
-use arduino_hal::hal::port::{Dynamic, PA4, PA5};
+use crate::timer::{delay_s, delay_us, GenericTicker, PrecisionTicker};
+use arduino_hal::hal::port::{Dynamic, PA0, PA1, PA4, PA5};
 use arduino_hal::port::mode::{Input, Output, PullUp};
 use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::{IntoPwmPin};
 use avr_device::interrupt;
 use core::cell::{Cell, RefCell};
 use core::pin::pin;
+use futures::select_biased;
 use crate::channel::{Channel, Receiver, Sender};
 use crate::joystick::{JoystickDirection, JoystickSwitch};
-use crate::stepper::{Stepper, StepperDirection};
+use crate::stepper::{StepperDirection};
 use crate::stepper::StepperDirection::{ClockWise, CounterClockWise, Idle};
+use futures::FutureExt;
 
 type Mutex<T> = interrupt::Mutex<T>;
 type Console = arduino_hal::hal::usart::Usart0<arduino_hal::DefaultClock>;
@@ -74,21 +76,21 @@ OUTPUT:
 
 // Joy stick Pins
 /// Joystick Right input Pin
-static J_RIGHT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_RIGHT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Left input Pin
-static J_LEFT: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_LEFT: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Forward input Pin
-static J_FORWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_FORWARD: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 /// Joystick Backward input Pin
-static J_BACKWARD: Mutex<Cell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(Cell::new(None));
+static J_BACKWARD: Mutex<RefCell<Option<Pin<Input<PullUp>, Dynamic>>>> = Mutex::new(RefCell::new(None));
 
 
 /// Create a console that can be used safely within an interrupt
 static CONSOLE: Mutex<RefCell<Option<Console>>> = Mutex::new(RefCell::new(None));
-
+const MAX_X_STEPS: i32 = 400;
 /**
 Entrypoint for the Program
 */
@@ -116,18 +118,11 @@ fn main() -> ! {
         *CONSOLE.borrow(cs).borrow_mut() = Some(serial);
 
         // set input pins
-        J_RIGHT
-            .borrow(cs)
-            .set(Some(pins.d50.into_pull_up_input().downgrade()));
-        J_LEFT
-            .borrow(cs)
-            .set(Some(pins.d51.into_pull_up_input().downgrade()));
-        J_FORWARD
-            .borrow(cs)
-            .set(Some(pins.d52.into_pull_up_input().downgrade()));
-        J_BACKWARD
-            .borrow(cs)
-            .set(Some(pins.d53.into_pull_up_input().downgrade()));
+        *J_RIGHT.borrow(cs).borrow_mut() = Some(pins.d50.into_pull_up_input().downgrade());
+        *J_LEFT.borrow(cs).borrow_mut() = Some(pins.d52.into_pull_up_input().downgrade());
+        *J_FORWARD.borrow(cs).borrow_mut() = Some(pins.d51.into_pull_up_input().downgrade());
+        *J_BACKWARD.borrow(cs).borrow_mut() = Some(pins.d53.into_pull_up_input().downgrade());
+
 
     });
 
@@ -140,31 +135,71 @@ fn main() -> ! {
     exint.pcmsk0.write(|w| w.bits(0b00001111));
     let x_channel: Channel<StepperDirection> = Channel::new();
     let joystick_right_task = pin!(joystick_switch_task(
-                        JoystickDirection::RIGHT,
-                        x_channel.get_sender()
-                    ));
-    let joystick_left_task = pin!(joystick_switch_task(
                         JoystickDirection::LEFT,
                         x_channel.get_sender()
                     ));
+    let joystick_left_task = pin!(joystick_switch_task(
+                        JoystickDirection::RIGHT,
+                        x_channel.get_sender()
+                    ));
 
-    let x_stepper_task = pin!(stepper_task_x(x_stepper_pulse, x_stepper_direction,x_channel.get_receiver()));
+    let x_stepper_task = pin!(x_gantry(x_channel.get_receiver(),x_stepper_pulse, x_stepper_direction,));
     executor::run_task(&mut [joystick_right_task,joystick_left_task,x_stepper_task])
 }
 
 
-async fn stepper_task_x(
-    stepper_pin: Pin<Output, PA5>,
-    direction_pin: Pin<Output, PA4>,
-    mut receiver: Receiver<'_, StepperDirection>,
+pub async fn x_gantry (
+    mut receiver: Receiver<'_,StepperDirection>,
+    mut x_stepper_direction: Pin<Output, PA5>,
+    mut x_stepper_pulse: Pin<Output, PA4>
 ) {
-    let mut motor = Stepper::new(stepper_pin, direction_pin, false);
+    let mut steps = 0;
+    let mut stepper_direction = Idle;
     loop {
-        let direction = receiver.receive().await;
-        motor.move_direction(direction,1000).await;
+        match stepper_direction {
+            Idle => {
+                stepper_direction = receiver.receive().await;
+            },
+            ClockWise => {
+                select_biased! {
+                    new_direction = receiver.receive().fuse() => {stepper_direction = new_direction;},
+                    _ = async {
+                        if steps < MAX_X_STEPS {
+                            x_stepper_pulse.set_high();
+                            delay_us(1000).await;
+                            x_stepper_pulse.set_low();
+                            delay_us(1000).await;
+                            steps += 1;
+                        }else {
+                            stepper_direction = Idle;
+                        }
+
+                    }.fuse() => {}
+                }
+            },
+            CounterClockWise => {
+                select_biased! {
+                    new_direction = receiver.receive().fuse() => {stepper_direction = new_direction},
+                    _ = async {
+                        if steps >= 0 {
+                            x_stepper_direction.set_high();
+                            x_stepper_pulse.set_high();
+                            delay_us(1000).await;
+                            x_stepper_pulse.set_low();
+                            delay_us(1000).await;
+                            x_stepper_direction.set_low();
+                            steps -= 1;
+
+                        }else {
+                            stepper_direction = Idle;
+                        }
+
+                    }.fuse() => {}
+                }
+            }
+        }
     }
 }
-
 async fn joystick_switch_task(
     direction: JoystickDirection,
     motor_sender: Sender<'_, StepperDirection>,
@@ -181,11 +216,20 @@ async fn joystick_switch_task(
     loop {
         // wait for a low state
         joystick_switch.wait_for(false).await;
+        interrupt::free(|cs| {
+            if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
+                let _ = ufmt::uwriteln!(console, "input");
+            }
+        });
 
         motor_sender.send(stepper_direction);
-
         // wait for a high state
         joystick_switch.wait_for(true).await;
+        interrupt::free(|cs| {
+            if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
+                let _ = ufmt::uwriteln!(console, "no input");
+            }
+        });
         motor_sender.send(Idle);
     }
 }

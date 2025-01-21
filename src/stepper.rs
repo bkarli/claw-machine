@@ -45,7 +45,7 @@ impl Stepper {
     /**
     Steps the motor in one direction with a pulse width or variable timeout
     */
-    pub async fn move_direction(&mut self, direction: StepperDirection, pulse_width: u16) {
+    pub async fn move_direction(&mut self, direction: StepperDirection, pulse_width: u32) {
         match direction {
             ClockWise => {
                 if self.max > MAX_STEPS {
